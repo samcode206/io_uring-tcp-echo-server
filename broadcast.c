@@ -25,8 +25,8 @@
 #define IO_URING_MAX_ENTRIES 1024
 
 #define IS_EOF(ret) ret == 0
-#define likely(x) __builtin_expect(!!(x), 1)
-#define unlikely(x) __builtin_expect(!!(x), 0)
+#define LIKELY(x) __builtin_expect(!!(x), 1)
+#define UNLIKELY(x) __builtin_expect(!!(x), 0)
 
 void log_fatal(const char* fn_name) {
   perror(fn_name);
@@ -173,7 +173,7 @@ int ev_loop_add_accept(struct broadcast* b, int fd,
 
 int ev_loop_add_recv(struct broadcast* b, struct conn* c) {
   struct request* req = broadcast_request_reserve(b, EV_RECV);
-  if (unlikely(req == NULL)) {
+  if (UNLIKELY(req == NULL)) {
     return -1;
   }
   request_set_conn(req, c);
@@ -246,7 +246,7 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
         break;
       case EV_RECV:
         printf("RECV\n");
-        if (unlikely(cqe->res <= 0)) {
+        if (UNLIKELY(cqe->res <= 0)) {
           if (IS_EOF(cqe->res)) {
             printf("client disconnected\n");
           } else {
