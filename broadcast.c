@@ -18,10 +18,10 @@
 #define EV_SEND 3
 #define EV_CLOSE 4
 
+
+#define CONN_BACKLOG 512
 #define MAX_CONNS 1024
-
 #define MAX_REQUESTS 4096
-
 #define IO_URING_MAX_ENTRIES 1024
 
 #define IS_EOF(ret) ret == 0
@@ -151,7 +151,7 @@ int must_listener_socket_init(int port) {
   if (bind(fd, (const struct sockaddr*)&srv_addr, sizeof(srv_addr)) < 0)
     log_fatal("bind()");
 
-  if (listen(fd, 10) < 0) log_fatal("listen()");
+  if (listen(fd, CONN_BACKLOG) < 0) log_fatal("listen()");
 
   return fd;
 }
