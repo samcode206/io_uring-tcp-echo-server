@@ -265,7 +265,14 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
       if (req == NULL) {
         printf("ACCEPT fd:%d \n", cqe->res);
         struct conn* new_conn = broadcast_conn_reserve(b, cqe->res);
+        if (!new_conn){
+          // handle
+        }
+
         struct request* r = broadcast_request_reserve(b, EV_RECV);
+        if (!r){
+          // handle
+        }
         request_set_conn(r, new_conn);
 
         ev_loop_add_recv(b, r);
