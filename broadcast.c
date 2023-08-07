@@ -18,7 +18,7 @@
 #define EV_CLOSE 3
 
 #define CONN_BACKLOG 512
-#define MAX_CONNS 1024
+#define MAX_CONNS 1024 + 4 /* stdin, stdout, stderr and server fd */
 #define MAX_REQUESTS 4096
 #define IO_URING_MAX_ENTRIES 1024
 
@@ -33,8 +33,6 @@ void log_fatal(const char* fn_name) {
 
 struct conn {
   int fd;
-  size_t b_idx;
-
   char* data;
   size_t offset;
 };
@@ -49,7 +47,7 @@ struct broadcast {
   struct io_uring ring;
 
   struct conn conns[MAX_CONNS];
-  size_t num_conns;
+  size_t max_fd;
 
   struct request reqs[MAX_REQUESTS];
   size_t num_reqs;
@@ -58,9 +56,15 @@ struct broadcast {
 struct broadcast* broadcast_init() {
   struct broadcast* b = (struct broadcast*)malloc(sizeof(struct broadcast));
   if (!b) return NULL;
-  b->num_conns = 0;
+  b->max_fd = 4;
   int ret = io_uring_queue_init(IO_URING_MAX_ENTRIES, &b->ring, 0);
   if (ret < 0) log_fatal("io_uring_queue_init");
+
+  for (size_t i = 0; i < MAX_CONNS; ++i) {
+    b->conns[i].data = NULL;
+    b->conns[i].fd = i;
+    b->conns[i].offset = -1;
+  }
 
   for (size_t i = 0; i < MAX_REQUESTS; ++i) {
     b->reqs[i].conn = NULL;
@@ -73,15 +77,16 @@ struct broadcast* broadcast_init() {
 }
 
 struct conn* broadcast_conn_reserve(struct broadcast* b, int fd) {
-  if (b->num_conns + 1 < MAX_CONNS) {
-    struct conn* c = &b->conns[b->num_conns];
-    c->b_idx = b->num_conns++;
-    c->data = NULL;
-    c->fd = fd;
-    c->offset = 0;
-    return c;
-  }
+  if (fd < MAX_CONNS) {
+    b->conns[fd].fd = fd;
+    b->conns[fd].offset = 0;
 
+    if (b->max_fd < fd) {
+      b->max_fd = fd;
+    }
+
+    return &b->conns[fd];
+  }
   return NULL;
 }
 
@@ -90,10 +95,12 @@ void broadcast_conn_put(struct broadcast* b, struct conn* c) {
     free(c->data);
     c->data = NULL;
   };
-  int idx = c->b_idx;
-  b->conns[idx] = b->conns[b->num_conns - 1];
-  b->conns[idx].b_idx = idx;
-  --b->num_conns;
+
+  if (c->fd == b->max_fd) {
+    b->max_fd = b->max_fd - 1;
+  }
+
+  c->offset = -1;
 }
 
 struct request* broadcast_request_reserve(struct broadcast* b, int ev_type) {
@@ -174,24 +181,18 @@ void ev_loop_add_multishot_accept(struct broadcast* b, int fd,
   io_uring_sqe_set_data(sqe, NULL);
 }
 
-int ev_loop_add_recv(struct broadcast* b, struct conn* c) {
-  struct request* req = broadcast_request_reserve(b, EV_RECV);
-  if (UNLIKELY(req == NULL)) {
-    return -1;
-  }
-  request_set_conn(req, c);
-
+int ev_loop_add_recv(struct broadcast* b, struct request* req) {
   struct io_uring_sqe* sqe = io_uring_get_sqe(&b->ring);
 
-  char* data = conn_prep_data(c);
+  char* data = conn_prep_data(req->conn);
   if (!data) {
     broadcast_request_put(b, req);
     return -1;
   }
 
-  int fd = conn_get_fd(c);
+  int fd = conn_get_fd(req->conn);
 
-  size_t offset = conn_get_data_offset(c);
+  size_t offset = conn_get_data_offset(req->conn);
   data += offset;
 
   io_uring_prep_recv(sqe, fd, data, 4096 - offset, 0);
@@ -228,66 +229,75 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
   socklen_t client_addr_len = sizeof(client_addr);
 
   ev_loop_add_multishot_accept(b, server_fd, &client_addr, &client_addr_len);
-  io_uring_submit(&b->ring);
-
-  size_t submissions = 0;
+  unsigned int pending_sqe = 1;
 
   for (;;) {
-    if (io_uring_wait_cqe(&b->ring, &cqe) < 0) log_fatal("io_uring_wait_cqe");
-    struct request* req = (struct request*)io_uring_cqe_get_data(cqe);
-
-    if (req == NULL) {
-      printf("ACCEPT\n");
-      struct conn* new_conn = broadcast_conn_reserve(b, cqe->res);
-      ev_loop_add_recv(b, new_conn);
-      ++submissions;
-    } else {
-      switch (req->ev_type) {
-        case EV_RECV:
-          printf("RECV\n");
-          if (UNLIKELY(cqe->res <= 0)) {
-            if (IS_EOF(cqe->res)) {
-              printf("client disconnected\n");
-            } else {
-              perror("recv");
-            }
-            ev_loop_add_close(b, req);
-            ++submissions;
-            break;
-          } else {
-            struct conn* sender_conn = req->conn;
-            ev_loop_add_recv(b, sender_conn);
-            broadcast_request_put(b, req);
-            ++submissions;
-
-            for (size_t i = 0; i < b->num_conns; ++i) {
-              if (b->conns[i].fd != sender_conn->fd) {
-                ev_loop_add_send(b, &b->conns[i], conn_get_data(sender_conn),
-                                 cqe->res);
-              }
-              ++submissions;
-            }
-
-          }
-          break;
-        case EV_SEND:
-          printf("SEND\n");
-          broadcast_request_put(b, req);
-          break;
-        case EV_CLOSE:
-          printf("CLOSE\n");
-          struct conn *closed_conn = req->conn;
-          broadcast_request_put(b, req);
-          broadcast_conn_put(b, closed_conn);
-          break;
+    unsigned int sqes_submittable = io_uring_sq_space_left(&b->ring);
+    if (pending_sqe && pending_sqe <= sqes_submittable) {
+      int ret = io_uring_submit_and_wait(&b->ring, 1);
+      if (ret < 0) {
+        perror("io_uring_wait_cqe");
+        break;
       }
+      pending_sqe = 0;
     }
 
-    io_uring_cqe_seen(&b->ring, cqe);
+    for (;;) {
+      int ret = io_uring_peek_cqe(&b->ring, &cqe);
+      if (ret == -EAGAIN) {
+        break;
+      }
 
-    if (submissions) {
-      io_uring_submit(&b->ring);
-      submissions = 0;
+      struct request* req = io_uring_cqe_get_data(cqe);
+      if (req == NULL) {
+        printf("ACCEPT fd:%d \n", cqe->res);
+        struct conn* new_conn = broadcast_conn_reserve(b, cqe->res);
+        struct request* r = broadcast_request_reserve(b, EV_RECV);
+        request_set_conn(r, new_conn);
+
+        ev_loop_add_recv(b, r);
+        ++pending_sqe;
+      } else {
+        switch (req->ev_type) {
+          case EV_RECV:
+            printf("RECV\n");
+            if (UNLIKELY(cqe->res <= 0)) {
+              if (IS_EOF(cqe->res)) {
+                printf("client disconnected\n");
+              } else {
+                perror("recv");
+              }
+              ev_loop_add_close(b, req);
+              ++pending_sqe;
+            } else {
+              ev_loop_add_recv(b, req);
+              ++pending_sqe;
+
+              // start from first client fd until max seen fd +1
+              for (size_t i = 5; i < b->max_fd + 1; ++i) {
+                if ((b->conns[i].offset != -1) &&
+                    (b->conns[i].fd != req->conn->fd)) {
+                  ev_loop_add_send(b, &b->conns[i], conn_get_data(req->conn),
+                                   cqe->res);
+                  ++pending_sqe;
+                }
+              }
+            }
+            break;
+          case EV_SEND:
+            printf("SEND\n");
+            broadcast_request_put(b, req);
+            break;
+          case EV_CLOSE:
+            printf("CLOSE\n");
+            struct conn* closed_conn = req->conn;
+            broadcast_request_put(b, req);
+            broadcast_conn_put(b, closed_conn);
+            break;
+        }
+      }
+
+      io_uring_cqe_seen(&b->ring, cqe);
     }
   }
 
