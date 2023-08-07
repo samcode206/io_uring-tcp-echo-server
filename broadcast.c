@@ -57,6 +57,7 @@ struct broadcast {
 
 struct broadcast* broadcast_init() {
   struct broadcast* b = (struct broadcast*)malloc(sizeof(struct broadcast));
+  if (!b) return NULL;
   b->num_conns = 0;
   int ret = io_uring_queue_init(IO_URING_MAX_ENTRIES, &b->ring, 0);
   if (ret < 0) log_fatal("io_uring_queue_init");
@@ -73,15 +74,15 @@ struct broadcast* broadcast_init() {
 
 struct conn* broadcast_conn_reserve(struct broadcast* b, int fd) {
   if (b->num_conns + 1 < MAX_CONNS) {
-    struct conn* c = &b->conns[b->num_conns++];
-    c->b_idx = b->num_conns;
+    struct conn* c = &b->conns[b->num_conns];
+    c->b_idx = b->num_conns++;
     c->data = NULL;
     c->fd = fd;
     c->offset = 0;
-
-  } else {
-    return NULL;
+    return c;
   }
+
+  return NULL;
 }
 
 void broadcast_conn_put(struct broadcast* b, struct conn* c) {
@@ -97,9 +98,9 @@ struct request* broadcast_request_reserve(struct broadcast* b, int ev_type) {
         return &b->reqs[i];
       }
     }
-  } else {
-    return NULL;
   }
+
+  return NULL;
 }
 
 static inline void broadcast_request_put(struct broadcast* b,
@@ -123,6 +124,7 @@ char* conn_prep_data(struct conn* c) {
     if (!c->data) {
       return NULL;
     }
+    return c->data;
   } else {
     return data;
   }
