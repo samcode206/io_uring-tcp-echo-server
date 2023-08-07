@@ -198,7 +198,7 @@ int ev_loop_add_recv(struct broadcast* b, struct request* req) {
   size_t offset = conn_get_data_offset(req->conn);
   data += offset;
 
-  io_uring_prep_recv(sqe, fd, data, 4096 - offset, 0);
+  io_uring_prep_recv(sqe, fd, data, MAX_BUFF_SIZE - offset, 0);
 
   io_uring_sqe_set_data(sqe, req);
 
