@@ -22,6 +22,9 @@
 #define MAX_REQUESTS 4096
 #define IO_URING_MAX_ENTRIES 1024
 
+#define MAX_BUFF_SIZE 4096
+
+
 #define IS_EOF(ret) ret == 0
 #define LIKELY(x) __builtin_expect(!!(x), 1)
 #define UNLIKELY(x) __builtin_expect(!!(x), 0)
@@ -134,7 +137,7 @@ size_t conn_get_data_offset(struct conn* c) { return c->offset; }
 char* conn_prep_data(struct conn* c) {
   char* data = conn_get_data(c);
   if (!data) {
-    c->data = malloc(sizeof(4096));
+    c->data = malloc(sizeof(char) * MAX_BUFF_SIZE);
     if (!c->data) {
       return NULL;
     }
