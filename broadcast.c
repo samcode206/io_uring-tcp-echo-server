@@ -265,17 +265,21 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
       if (req == NULL) {
         printf("ACCEPT fd:%d \n", cqe->res);
         struct conn* new_conn = broadcast_conn_reserve(b, cqe->res);
-        if (!new_conn){
+        if (!new_conn) {
           // handle
+          log_fatal("broadcast_conn_reserve");
         }
 
         struct request* r = broadcast_request_reserve(b, EV_RECV);
-        if (!r){
+        if (!r) {
           // handle
+          log_fatal("broadcast_request_reserve");
         }
         request_set_conn(r, new_conn);
 
-        ev_loop_add_recv(b, r);
+        if (ev_loop_add_recv(b, r) == -1) {
+          log_fatal("ev_loop_add_recv");
+        };
         ++pending_sqe;
       } else {
         switch (req->ev_type) {
@@ -287,7 +291,10 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
               } else {
                 perror("recv");
               }
-              ev_loop_add_close(b, req);
+
+              if (ev_loop_add_close(b, req) == -1) {
+                log_fatal("ev_loop_add_close");
+              };
               ++pending_sqe;
             } else {
               ev_loop_add_recv(b, req);
@@ -297,16 +304,26 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
               for (size_t i = 5; i < b->max_fd + 1; ++i) {
                 if ((b->conns[i].offset != -1) &&
                     (b->conns[i].fd != req->conn->fd)) {
-                  ev_loop_add_send(b, &b->conns[i], conn_get_data(req->conn),
-                                   cqe->res);
+                  if (ev_loop_add_send(b, &b->conns[i],
+                                       conn_get_data(req->conn),
+                                       cqe->res) == -1) {
+                    log_fatal("ev_loop_add_send");
+                  };
                   ++pending_sqe;
                 }
               }
             }
             break;
           case EV_SEND:
-            printf("SEND\n");
-            broadcast_request_put(b, req);
+            if (cqe->res < 0) {
+              req->ev_type = EV_CLOSE;
+              req->conn->offset = -1;
+              ev_loop_add_close(b, req);
+              ++pending_sqe;
+            } else {
+              printf("SEND\n");
+              broadcast_request_put(b, req);
+            }
             break;
           case EV_CLOSE:
             printf("CLOSE\n");
