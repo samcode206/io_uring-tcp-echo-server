@@ -86,7 +86,14 @@ struct conn* broadcast_conn_reserve(struct broadcast* b, int fd) {
 }
 
 void broadcast_conn_put(struct broadcast* b, struct conn* c) {
-  /* TODO(sah): implement */
+  if (c->data) {
+    free(c->data);
+    c->data = NULL;
+  };
+  int idx = c->b_idx;
+  b->conns[idx] = b->conns[b->num_conns - 1];
+  b->conns[idx].b_idx = idx;
+  --b->num_conns;
 }
 
 struct request* broadcast_request_reserve(struct broadcast* b, int ev_type) {
@@ -194,6 +201,14 @@ int ev_loop_add_recv(struct broadcast* b, struct conn* c) {
   return 0;
 }
 
+int ev_loop_add_close(struct broadcast* b, struct request* req) {
+  struct io_uring_sqe* sqe = io_uring_get_sqe(&b->ring);
+  io_uring_prep_close(sqe, req->conn->fd);
+  req->ev_type = EV_CLOSE;
+  io_uring_sqe_set_data(sqe, req);
+  return 0;
+}
+
 int ev_loop_add_send(struct broadcast* b, struct conn* conn_receiver,
                      const void* data, size_t len) {
   struct request* req = broadcast_request_reserve(b, EV_SEND);
@@ -236,23 +251,24 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
             } else {
               perror("recv");
             }
-            break;
-          }
-
-          struct conn* sender_conn = req->conn;
-          broadcast_request_put(b, req);
-          ev_loop_add_recv(b, sender_conn);
-
-          ++submissions;
-
-          for (size_t i = 0; i < b->num_conns; ++i) {
-            if (b->conns[i].fd != req->conn->fd) {
-              ev_loop_add_send(b, &b->conns[i], conn_get_data(sender_conn),
-                               cqe->res);
-            }
+            ev_loop_add_close(b, req);
             ++submissions;
-          }
+            break;
+          } else {
+            struct conn* sender_conn = req->conn;
+            ev_loop_add_recv(b, sender_conn);
+            broadcast_request_put(b, req);
+            ++submissions;
 
+            for (size_t i = 0; i < b->num_conns; ++i) {
+              if (b->conns[i].fd != sender_conn->fd) {
+                ev_loop_add_send(b, &b->conns[i], conn_get_data(sender_conn),
+                                 cqe->res);
+              }
+              ++submissions;
+            }
+
+          }
           break;
         case EV_SEND:
           printf("SEND\n");
@@ -260,6 +276,9 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
           break;
         case EV_CLOSE:
           printf("CLOSE\n");
+          struct conn *closed_conn = req->conn;
+          broadcast_request_put(b, req);
+          broadcast_conn_put(b, closed_conn);
           break;
       }
     }
