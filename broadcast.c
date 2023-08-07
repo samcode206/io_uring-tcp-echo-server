@@ -24,7 +24,6 @@
 
 #define MAX_BUFF_SIZE 4096
 
-
 #define IS_EOF(ret) ret == 0
 #define LIKELY(x) __builtin_expect(!!(x), 1)
 #define UNLIKELY(x) __builtin_expect(!!(x), 0)
@@ -186,6 +185,9 @@ void ev_loop_add_multishot_accept(struct broadcast* b, int fd,
 
 int ev_loop_add_recv(struct broadcast* b, struct request* req) {
   struct io_uring_sqe* sqe = io_uring_get_sqe(&b->ring);
+  if (!sqe) {
+    return -1;
+  }
 
   char* data = conn_prep_data(req->conn);
   if (!data) {
@@ -207,6 +209,9 @@ int ev_loop_add_recv(struct broadcast* b, struct request* req) {
 
 int ev_loop_add_close(struct broadcast* b, struct request* req) {
   struct io_uring_sqe* sqe = io_uring_get_sqe(&b->ring);
+  if (!sqe) {
+    return -1;
+  }
   io_uring_prep_close(sqe, req->conn->fd);
   req->ev_type = EV_CLOSE;
   io_uring_sqe_set_data(sqe, req);
@@ -221,6 +226,11 @@ int ev_loop_add_send(struct broadcast* b, struct conn* conn_receiver,
   }
   request_set_conn(req, conn_receiver);
   struct io_uring_sqe* sqe = io_uring_get_sqe(&b->ring);
+  if (!sqe) {
+    broadcast_request_put(b, req);
+    return -1;
+  }
+
   io_uring_prep_send(sqe, conn_receiver->fd, data, len, 0);
   io_uring_sqe_set_data(sqe, req);
   return 0;
