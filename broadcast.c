@@ -356,7 +356,9 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
               printf("bytes received: %d\n", cqe->res);
               printf("buffer id: %d\n", buffer_id);
               printf("data: %s\n", b->bufs[buffer_id]);
-         
+
+              io_uring_buf_ring_advance(b->buf_ring, 1);
+
               ++pending_sqe;
 
               // start from first client fd until max seen fd +1
