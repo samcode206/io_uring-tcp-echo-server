@@ -25,7 +25,7 @@ func main() {
 	
 
 
-	data := strings.Repeat(fmt.Sprintf("%d", seq), 1024 * 1024)
+	data := strings.Repeat(fmt.Sprintf("%d", seq), 4096)
 	seq++
 	// data, err := os.ReadFile("payload.json")
 	// if err != nil {
@@ -59,7 +59,6 @@ func main() {
 
 				// fmt.Print(string(buff[:n]))
 
-				time.Sleep(time.Millisecond*10) 
 				// data = strings.Repeat(fmt.Sprintf("%d", seq), 4096 * 3)
 				seq++
 			}

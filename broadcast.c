@@ -20,7 +20,7 @@
 #define CONN_BACKLOG 512
 #define MAX_CONNS 1024 + 4 /* stdin, stdout, stderr and server fd */
 #define MAX_REQUESTS 4096
-#define IO_URING_MAX_ENTRIES 1024
+#define IO_URING_MAX_ENTRIES 4096
 
 #define MAX_BUFF_SIZE 4096
 
@@ -123,6 +123,7 @@ static inline void broadcast_request_put(struct broadcast* b,
                                          struct request* r) {
   b->reqs[r->id].ev_type = EV_UNDEFINED;
   b->reqs[r->id].conn = NULL;
+  --b->num_reqs;
 }
 
 static inline void request_set_conn(struct request* r, struct conn* c) {
@@ -284,7 +285,7 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
       } else {
         switch (req->ev_type) {
           case EV_RECV:
-            printf("RECV\n");
+            // printf("RECV\n");
             if (UNLIKELY(cqe->res <= 0)) {
               if (IS_EOF(cqe->res)) {
                 printf("client disconnected\n");
@@ -321,7 +322,7 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
               ev_loop_add_close(b, req);
               ++pending_sqe;
             } else {
-              printf("SEND\n");
+              // printf("SEND\n");
               broadcast_request_put(b, req);
             }
             break;
