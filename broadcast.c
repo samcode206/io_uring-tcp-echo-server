@@ -53,7 +53,56 @@ struct broadcast {
 
   struct request reqs[MAX_REQUESTS];
   size_t num_reqs;
+
+  char** bufs;
+  struct io_uring_buf_ring* buf_ring;
 };
+
+#define BUFS_IN_GROUP 4
+#define BUF_BGID 0
+#define BUF_SIZE 4096
+
+char** prepare_bufs() {
+  char** bufs = malloc(sizeof(char*) * BUFS_IN_GROUP);
+
+  for (size_t i = 0; i < BUFS_IN_GROUP; ++i) {
+    bufs[i] = malloc(sizeof(char) * BUF_SIZE);
+  }
+
+  return bufs;
+}
+
+struct io_uring_buf_ring* setup_buffer_ring(struct io_uring* ring,
+                                            char** bufs) {
+  struct io_uring_buf_reg reg = {0};
+  struct io_uring_buf_ring* br;
+  int i;
+
+  /* allocate mem for sharing buffer ring */
+  if (posix_memalign((void**)&br, getpagesize(),
+                     BUFS_IN_GROUP * sizeof(struct io_uring_buf_ring)))
+    return NULL;
+
+  /* assign and register buffer ring */
+  reg.ring_addr = (unsigned long)br;
+  reg.ring_entries = BUFS_IN_GROUP;
+  reg.bgid = BUF_BGID;
+  if (io_uring_register_buf_ring(ring, &reg, 0)) {
+    return NULL;
+  }
+
+  /* add initial buffers to the ring */
+  io_uring_buf_ring_init(br);
+  for (i = 0; i < BUFS_IN_GROUP; i++) {
+    /* add each buffer, we'll use i buffer ID */
+    io_uring_buf_ring_add(br, bufs[i], BUF_SIZE, i,
+                          io_uring_buf_ring_mask(BUFS_IN_GROUP), i);
+  }
+
+  /* we've supplied buffers, make them visible to the kernel */
+  io_uring_buf_ring_advance(br, BUFS_IN_GROUP);
+  return br;
+}
 
 struct broadcast* broadcast_init() {
   struct broadcast* b = (struct broadcast*)malloc(sizeof(struct broadcast));
@@ -75,6 +124,9 @@ struct broadcast* broadcast_init() {
   };
 
   b->num_reqs = 0;
+  b->bufs = prepare_bufs();
+  b->buf_ring = setup_buffer_ring(&b->ring, b->bufs);
+
   return b;
 }
 
@@ -190,19 +242,12 @@ int ev_loop_add_recv(struct broadcast* b, struct request* req) {
     return -1;
   }
 
-  char* data = conn_prep_data(req->conn);
-  if (!data) {
-    broadcast_request_put(b, req);
-    return -1;
-  }
-
   int fd = conn_get_fd(req->conn);
 
-  size_t offset = conn_get_data_offset(req->conn);
-  data += offset;
+  io_uring_prep_recv_multishot(sqe, fd, NULL, 0, 0);
 
-  io_uring_prep_recv(sqe, fd, data, MAX_BUFF_SIZE - offset, 0);
-
+  sqe->buf_group = BUF_BGID;
+  sqe->flags |= IOSQE_BUFFER_SELECT;
   io_uring_sqe_set_data(sqe, req);
 
   return 0;
@@ -264,40 +309,53 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
 
       struct request* req = io_uring_cqe_get_data(cqe);
       if (req == NULL) {
-        printf("ACCEPT fd:%d \n", cqe->res);
-        struct conn* new_conn = broadcast_conn_reserve(b, cqe->res);
-        if (!new_conn) {
-          // handle
-          log_fatal("broadcast_conn_reserve");
-        }
+        if (cqe->res > 0) {
+          printf("ACCEPT fd:%d \n", cqe->res);
+          struct conn* new_conn = broadcast_conn_reserve(b, cqe->res);
+          if (!new_conn) {
+            // handle
+            log_fatal("broadcast_conn_reserve");
+          }
 
-        struct request* r = broadcast_request_reserve(b, EV_RECV);
-        if (!r) {
-          // handle
-          log_fatal("broadcast_request_reserve");
-        }
-        request_set_conn(r, new_conn);
+          struct request* r = broadcast_request_reserve(b, EV_RECV);
+          if (!r) {
+            // handle
+            log_fatal("broadcast_request_reserve");
+          }
+          request_set_conn(r, new_conn);
 
-        if (ev_loop_add_recv(b, r) == -1) {
-          log_fatal("ev_loop_add_recv");
-        };
-        ++pending_sqe;
+          if (ev_loop_add_recv(b, r) == -1) {
+            log_fatal("ev_loop_add_recv");
+          };
+          ++pending_sqe;
+        }
       } else {
         switch (req->ev_type) {
           case EV_RECV:
-            // printf("RECV\n");
+            printf("----------------------\n");
+
             if (UNLIKELY(cqe->res <= 0)) {
               if (IS_EOF(cqe->res)) {
                 printf("client disconnected\n");
+                if (ev_loop_add_close(b, req) == -1) {
+                  log_fatal("ev_loop_add_close");
+                };
+              } else if (cqe->res == -ENOBUFS) {
+                printf("ran out of buffers\n");
               } else {
+                printf("%d\n", cqe->res);
                 perror("recv");
+                if (ev_loop_add_close(b, req) == -1) {
+                  log_fatal("ev_loop_add_close");
+                };
               }
 
-              if (ev_loop_add_close(b, req) == -1) {
-                log_fatal("ev_loop_add_close");
-              };
               ++pending_sqe;
             } else {
+              int buffer_id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
+              printf("bytes received: %d\n", cqe->res);
+              printf("buffer id: %d\n", buffer_id);
+              printf("data: %s\n", b->bufs[buffer_id]);
               ev_loop_add_recv(b, req);
               ++pending_sqe;
 
@@ -314,6 +372,8 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
                 }
               }
             }
+            printf("----------------------\n");
+
             break;
           case EV_SEND:
             if (cqe->res < 0) {
