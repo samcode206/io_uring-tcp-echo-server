@@ -369,7 +369,7 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
                 if ((b->conns[i].offset != -1) &&
                     (b->conns[i].fd != req->conn->fd)) {
                   if (ev_loop_add_send(b, &b->conns[i],
-                                       conn_get_data(req->conn),
+                                       b->bufs[buffer_id],
                                        cqe->res) == -1) {
                     log_fatal("ev_loop_add_send");
                   };
