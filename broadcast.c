@@ -17,6 +17,11 @@
 #define EV_SEND 2
 #define EV_CLOSE 3
 
+
+#define BUFS_IN_GROUP 1024
+#define BUF_BGID 0
+#define BUF_SIZE 4096
+
 #define CONN_BACKLOG 512
 #define MAX_CONNS 1024 + 4 /* stdin, stdout, stderr and server fd */
 #define MAX_REQUESTS 4096
@@ -58,9 +63,7 @@ struct broadcast {
   struct io_uring_buf_ring* buf_ring;
 };
 
-#define BUFS_IN_GROUP 4
-#define BUF_BGID 0
-#define BUF_SIZE 4096
+
 
 char** prepare_bufs() {
   char** bufs = malloc(sizeof(char*) * BUFS_IN_GROUP);
