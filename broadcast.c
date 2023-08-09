@@ -17,8 +17,7 @@
 #define EV_SEND 2
 #define EV_CLOSE 3
 
-
-#define BUFS_IN_GROUP 1024
+#define BUFS_IN_GROUP 1024 * 32
 #define BUF_BGID 0
 #define BUF_SIZE 4096
 
@@ -33,8 +32,8 @@
 #define LIKELY(x) __builtin_expect(!!(x), 1)
 #define UNLIKELY(x) __builtin_expect(!!(x), 0)
 
-void log_fatal(const char* fn_name) {
-  perror(fn_name);
+void log_fatal(const char* reason) {
+  printf("%s\n", reason);
   exit(1);
 }
 
@@ -62,8 +61,6 @@ struct broadcast {
   char** bufs;
   struct io_uring_buf_ring* buf_ring;
 };
-
-
 
 char** prepare_bufs() {
   char** bufs = malloc(sizeof(char*) * BUFS_IN_GROUP);
@@ -335,7 +332,7 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
       } else {
         switch (req->ev_type) {
           case EV_RECV:
-            printf("----------------------\n");
+            // printf("----------------------\n");
 
             if (UNLIKELY(cqe->res <= 0)) {
               if (IS_EOF(cqe->res)) {
@@ -356,10 +353,13 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
               ++pending_sqe;
             } else {
               int buffer_id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
-              printf("bytes received: %d\n", cqe->res);
-              printf("buffer id: %d\n", buffer_id);
-              printf("data: %s\n", b->bufs[buffer_id]);
+              // printf("bytes received: %d\n", cqe->res);
+              // printf("buffer id: %d\n", buffer_id);
+              // printf("data: %s\n", b->bufs[buffer_id]);
 
+              io_uring_buf_ring_add(b->buf_ring, b->bufs[buffer_id], BUF_SIZE,
+                                    buffer_id,
+                                    io_uring_buf_ring_mask(BUFS_IN_GROUP), 0);
               io_uring_buf_ring_advance(b->buf_ring, 1);
 
               ++pending_sqe;
@@ -368,8 +368,7 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
               for (size_t i = 5; i < b->max_fd + 1; ++i) {
                 if ((b->conns[i].offset != -1) &&
                     (b->conns[i].fd != req->conn->fd)) {
-                  if (ev_loop_add_send(b, &b->conns[i],
-                                       b->bufs[buffer_id],
+                  if (ev_loop_add_send(b, &b->conns[i], b->bufs[buffer_id],
                                        cqe->res) == -1) {
                     log_fatal("ev_loop_add_send");
                   };
@@ -377,7 +376,7 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
                 }
               }
             }
-            printf("----------------------\n");
+            // printf("----------------------\n");
 
             break;
           case EV_SEND:
