@@ -246,8 +246,7 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
   unsigned int pending_sqe = 1;
 
   for (;;) {
-    unsigned int sqes_submittable = io_uring_sq_space_left(&b->ring);
-    if (pending_sqe && pending_sqe <= sqes_submittable) {
+    if (pending_sqe) {
       int ret = io_uring_submit_and_wait(&b->ring, 1);
       if (ret < 0) {
         perror("io_uring_wait_cqe");
