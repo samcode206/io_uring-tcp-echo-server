@@ -28,8 +28,8 @@
 #define LIKELY(x) __builtin_expect(!!(x), 1)
 #define UNLIKELY(x) __builtin_expect(!!(x), 0)
 
-void log_fatal(const char* fn_name) {
-  perror(fn_name);
+void log_fatal(const char* reason) {
+  printf("%s\n", reason);
   exit(1);
 }
 
@@ -59,8 +59,14 @@ struct broadcast* broadcast_init() {
   struct broadcast* b = (struct broadcast*)malloc(sizeof(struct broadcast));
   if (!b) return NULL;
   b->max_fd = 4;
-  int ret = io_uring_queue_init(IO_URING_MAX_ENTRIES, &b->ring, 0);
-  if (ret < 0) log_fatal("io_uring_queue_init");
+
+  struct io_uring_params params;
+  memset(&params, 0, sizeof(params));
+  params.flags = IORING_SETUP_SINGLE_ISSUER;
+
+  if (io_uring_queue_init_params(IO_URING_MAX_ENTRIES, &b->ring, &params) < 0) {
+    log_fatal("io_uring_init_failed...");
+  }
 
   for (size_t i = 0; i < MAX_CONNS; ++i) {
     b->conns[i].data = NULL;
@@ -260,7 +266,6 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
       if (ret == -EAGAIN) {
         break;
       }
-
       struct request* req = io_uring_cqe_get_data(cqe);
       if (req == NULL) {
         printf("ACCEPT fd:%d \n", cqe->res);
