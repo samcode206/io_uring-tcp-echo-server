@@ -234,9 +234,9 @@ int ev_loop_add_send(struct broadcast* b, struct conn* conn_receiver,
     return -1;
   }
 
+  io_uring_prep_send(sqe, conn_receiver->fd, data, len, 0);
   sqe->fd = conn_receiver->fd;
   sqe->flags |= IOSQE_FIXED_FILE;
-  io_uring_prep_send(sqe, conn_receiver->fd, data, len, 0);
   io_uring_sqe_set_data(sqe, req);
   return 0;
 }
@@ -287,7 +287,7 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
       } else {
         switch (req->ev_type) {
           case EV_RECV:
-            printf("RECV\n");
+            // printf("RECV\n");
             if (UNLIKELY(cqe->res <= 0)) {
               if (IS_EOF(cqe->res)) {
                 printf("client disconnected\n");
