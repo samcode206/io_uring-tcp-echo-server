@@ -304,7 +304,7 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
               ev_loop_add_recv(b, req);
               ++pending_sqe;
 
-              printf("%s\n", conn_get_data(req->conn));
+              // printf("%s\n", conn_get_data(req->conn));
               // start from first client fd until max seen fd +1
               for (size_t i = 0; i < b->max_fd + 1; ++i) {
                 if ((b->conns[i].fd != -1) &&
