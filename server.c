@@ -128,26 +128,28 @@ void server_ev_loop_start(server_t *s, int fd) {
     io_uring_for_each_cqe(&s->ring, head, cqe) {
       ++i;
       void *ctx = io_uring_cqe_get_data(cqe);
-      if (!ctx){
+      if (!ctx) {
         // ACCEPT
         printf("ACCEPT %d\n", cqe->res);
         struct io_uring_sqe *sqe = io_uring_get_sqe(&s->ring);
-        if (!sqe){
+        if (!sqe) {
           io_uring_submit(&s->ring);
           sqe = io_uring_get_sqe(&s->ring);
-          if (!sqe){
+          if (!sqe) {
             printf("failed to get an sqe...\n");
             exit(1);
           }
         }
-        
+        sqe->fd = fd;
+        sqe->buf_group = 0;
         io_uring_prep_recv_multishot(sqe, cqe->res, NULL, 0, 0);
-        sqe->fd = cqe->res;
-        sqe->flags |= IOSQE_FIXED_FILE;
+        io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE | IOSQE_BUFFER_SELECT);
         
+        io_uring_sqe_set_data(sqe, (void *)1);
+      } else if (ctx == (void *)1) {
+        printf("RECV %d\n", cqe->res);
 
       }
-
     };
 
     io_uring_cq_advance(&s->ring, i);
