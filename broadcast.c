@@ -18,7 +18,7 @@
 #define EV_CLOSE 3
 
 #define CONN_BACKLOG 512
-#define MAX_CONNS 1024 + 4 /* stdin, stdout, stderr and server fd */
+#define MAX_CONNS 1024
 #define MAX_REQUESTS 1000000
 #define IO_URING_MAX_ENTRIES 4096
 
@@ -178,8 +178,8 @@ void ev_loop_add_multishot_accept(struct broadcast* b, int fd,
                                   socklen_t* client_addr_len) {
   struct io_uring_sqe* sqe = io_uring_get_sqe(&b->ring);
 
-  io_uring_prep_multishot_accept(sqe, fd, (struct sockaddr*)client_addr,
-                                 client_addr_len, 0);
+  io_uring_prep_multishot_accept_direct(sqe, fd, (struct sockaddr*)client_addr,
+                                        client_addr_len, 0);
 
   io_uring_sqe_set_data(sqe, NULL);
 }
@@ -197,9 +197,9 @@ int ev_loop_add_recv(struct broadcast* b, struct request* req) {
   }
 
   int fd = conn_get_fd(req->conn);
-
   io_uring_prep_recv(sqe, fd, data, MAX_BUFF_SIZE, 0);
-
+  sqe->flags |= IOSQE_FIXED_FILE;
+  sqe->fd = fd;
   io_uring_sqe_set_data(sqe, req);
 
   return 0;
@@ -210,7 +210,11 @@ int ev_loop_add_close(struct broadcast* b, struct request* req) {
   if (!sqe) {
     return -1;
   }
+
+  sqe->fd = req->conn->fd;
+  sqe->flags |= IOSQE_FIXED_FILE;
   io_uring_prep_close(sqe, req->conn->fd);
+
   req->ev_type = EV_CLOSE;
   io_uring_sqe_set_data(sqe, req);
   return 0;
@@ -230,6 +234,8 @@ int ev_loop_add_send(struct broadcast* b, struct conn* conn_receiver,
     return -1;
   }
 
+  sqe->fd = conn_receiver->fd;
+  sqe->flags |= IOSQE_FIXED_FILE;
   io_uring_prep_send(sqe, conn_receiver->fd, data, len, 0);
   io_uring_sqe_set_data(sqe, req);
   return 0;
@@ -281,7 +287,7 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
       } else {
         switch (req->ev_type) {
           case EV_RECV:
-            // printf("RECV\n");
+            printf("RECV\n");
             if (UNLIKELY(cqe->res <= 0)) {
               if (IS_EOF(cqe->res)) {
                 printf("client disconnected\n");
@@ -298,8 +304,9 @@ int ev_loop_init(int server_fd, struct broadcast* b) {
               ev_loop_add_recv(b, req);
               ++pending_sqe;
 
+              printf("%s\n", conn_get_data(req->conn));
               // start from first client fd until max seen fd +1
-              for (size_t i = 5; i < b->max_fd + 1; ++i) {
+              for (size_t i = 0; i < b->max_fd + 1; ++i) {
                 if ((b->conns[i].fd != -1) &&
                     (b->conns[i].fd != req->conn->fd)) {
                   if (ev_loop_add_send(b, &b->conns[i],
@@ -350,6 +357,9 @@ int main() {
   int server_fd = must_listener_socket_init(PORT);
 
   struct broadcast* b = broadcast_init();
+
+  assert(io_uring_register_files_sparse(&b->ring, MAX_CONNS) == 0);
+  assert(io_uring_register_ring_fd(&b->ring) > 0);
 
   // TODO(sah): add signal handlers before starting event loop
   printf("Starting Sever on port: %d\n", PORT);
