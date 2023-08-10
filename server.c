@@ -170,6 +170,12 @@ struct io_uring_sqe *must_get_sqe(server_t *s) {
   return sqe;
 }
 
+inline static char *server_get_selected_buffer(server_t *s, uint32_t bgid,
+                                               uint32_t buf_idx) {
+  char *buf = (char *)s->buf_rings[bgid]->bufs->addr;
+  return buf + (buf_idx * (sizeof(char) * BUFFER_SIZE));
+}
+
 void server_ev_loop_start(server_t *s, int listener_fd) {
   struct io_uring_sqe *accept_ms_sqe = io_uring_get_sqe(&s->ring);
   struct sockaddr_in client_addr;
@@ -243,8 +249,8 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
           unsigned int buf_id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
           uint32_t bgid = get_bgid(ctx);
 
-          void *buf = (void *)s->buf_rings[bgid]->bufs->addr;
-          printf("%s\n", (char *)buf + (buf_id * (sizeof(char) * BUFFER_SIZE)));
+          char *recv_buf = server_get_selected_buffer(s, bgid, buf_id);
+          printf("%s\n", recv_buf);
         }
 
       } else if (ev == EV_SEND) {
