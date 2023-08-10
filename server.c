@@ -17,7 +17,7 @@
 #define SQ_ENTRIES 1024
 
 #define BUFFER_SIZE 1024 * 4
-#define BUF_RINGS 1
+#define BUF_RINGS 4
 #define BG_ENTRIES 1024 * 4
 #define CONN_BACKLOG 256
 
@@ -103,7 +103,7 @@ void server_register_buf_rings(server_t *s) {
     char *group_buf = (char *)calloc(BG_ENTRIES * BUFFER_SIZE, sizeof(char));
     assert(group_buf != NULL);
     s->buf_rings[i] =
-        server_register_bg(s, 0, BG_ENTRIES, group_buf, BUFFER_SIZE);
+        server_register_bg(s, i, BG_ENTRIES, group_buf, BUFFER_SIZE);
     assert(s->buf_rings[i] != NULL);
   }
 }
