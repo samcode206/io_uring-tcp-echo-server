@@ -228,7 +228,7 @@ void server_add_close_direct(server_t *s, uint32_t fd) {
   }
 }
 
-void server_handle_recv_err(server_t *s, int err, uint64_t ctx) {
+static inline void server_handle_recv_err(server_t *s, int err, uint64_t ctx) {
   if (err == 0) {
     server_add_close_direct(s, get_fd(ctx));
   } else if (err == -ENOBUFS) {
@@ -260,20 +260,12 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
       uint64_t ctx = io_uring_cqe_get_data64(cqe);
       uint8_t ev = get_event(ctx);
 
-      if (ev == EV_ACCEPT) {
-        // ACCEPT
-        if (cqe->res < 0) {
-          printf("accept error: %d exiting...\n", cqe->res);
-          exit(1);
-        }
-        printf("ACCEPT %d\n", cqe->res);
-        s->fds[cqe->res] = FD_OPEN;
-        server_add_multishot_recv(s, cqe->res);
-      } else if (ev == EV_RECV) {
-        printf("RECV %d\n", cqe->res);
+      switch (ev) {
+      case EV_RECV:
         if (cqe->res <= 0) {
           server_handle_recv_err(s, cqe->res, ctx);
         } else {
+          printf("RECV %d\n", cqe->res);
           unsigned int buf_id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
           uint32_t bgid = get_bgid(ctx);
           printf("buffer-group: %d\tbuffer-id: %d\n", bgid, buf_id);
@@ -281,19 +273,28 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
           printf("%s\n", recv_buf);
           // server_release_one_buf(s, recv_buf, bgid, buf_id);
         }
-
-      } else if (ev == EV_SEND) {
+        break;
+      case EV_ACCEPT:
+        if (cqe->res < 0) {
+          printf("accept error: %d exiting...\n", cqe->res);
+          exit(1);
+        }
+        printf("ACCEPT %d\n", cqe->res);
+        s->fds[cqe->res] = FD_OPEN;
+        server_add_multishot_recv(s, cqe->res);
+        break;
+      case EV_SEND:
         printf("SEND %d\n", cqe->res);
-      } else if (ev == EV_CLOSE) {
-        printf("CLOSE %d\n", cqe->res);
+        break;
+      case EV_CLOSE:
         if (cqe->res == 0) {
           uint32_t closed_fd = get_fd(ctx);
           printf("file closed %d\n", closed_fd);
           s->fds[closed_fd] = FD_UNUSED;
+        } else {
+          printf("close error: %d\n", cqe->res);
         }
-
-      } else {
-        printf("here\n");
+        break;
       }
     };
     // printf("end loop iteration cqes seen %d\n", i);
