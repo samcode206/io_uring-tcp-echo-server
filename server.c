@@ -13,9 +13,9 @@
 #include <unistd.h>
 
 #define MAX_FDS 1024
-#define SQ_ENTRIES 1024
+#define SQ_DEPTH 1024
 #define BUFFER_SIZE 1024 * 4
-#define BUF_RINGS 4 // must be power of 2
+#define BUF_RINGS 4  // must be power of 2
 #define BG_ENTRIES 4 // must be power of 2
 #define CONN_BACKLOG 256
 
@@ -86,7 +86,7 @@ server_t *server_init(void) {
   // params.cq_entries = CQ_ENTRIES; also add IORING_SETUP_CQSIZE to flags
   params.flags = IORING_SETUP_COOP_TASKRUN | IORING_SETUP_SINGLE_ISSUER;
 
-  assert(io_uring_queue_init_params(SQ_ENTRIES, &s->ring, &params) == 0);
+  assert(io_uring_queue_init_params(SQ_DEPTH, &s->ring, &params) == 0);
   assert(io_uring_register_files_sparse(&s->ring, MAX_FDS) == 0);
   assert(io_uring_register_ring_fd(&s->ring) == 1);
 
@@ -107,9 +107,10 @@ void server_register_buf_rings(server_t *s) {
 
 struct io_uring_buf_ring *server_register_bg(server_t *s, unsigned short bgid,
                                              unsigned int entries, char *buf,
-                                             unsigned int buf_sz) {  
+                                             unsigned int buf_sz) {
   int ret;
-  struct io_uring_buf_ring *br = io_uring_setup_buf_ring(&s->ring, entries, bgid, 0, &ret);
+  struct io_uring_buf_ring *br =
+      io_uring_setup_buf_ring(&s->ring, entries, bgid, 0, &ret);
   assert(ret == 0);
   io_uring_buf_ring_init(br);
 
@@ -168,7 +169,7 @@ inline static char *server_get_selected_buffer(server_t *s, uint32_t bgid,
 inline static int server_get_active_bgid(server_t *s) { return s->active_bgid; }
 
 inline static void server_active_bgid_next(server_t *s) {
-  s->active_bgid = (s->active_bgid + 1) & (BUF_RINGS-1);
+  s->active_bgid = (s->active_bgid + 1) & (BUF_RINGS - 1);
 }
 
 inline static void server_release_one_buf(server_t *s, char *buf, uint32_t bgid,
@@ -180,9 +181,25 @@ inline static void server_release_one_buf(server_t *s, char *buf, uint32_t bgid,
   io_uring_buf_ring_advance(s->buf_rings[bgid], 1);
 }
 
+int server_add_multishot_accept(server_t *s, int listener_fd) {
+  struct io_uring_sqe *accept_ms_sqe = must_get_sqe(s);
+  struct sockaddr_in client_addr;
+
+  socklen_t client_addr_len = sizeof(client_addr);
+  assert(accept_ms_sqe != NULL);
+  io_uring_prep_multishot_accept_direct(accept_ms_sqe, listener_fd,
+                                        (struct sockaddr *)&client_addr,
+                                        &client_addr_len, 0);
+
+  uint64_t accept_ctx = 0;
+  set_event(&accept_ctx, EV_ACCEPT);
+  io_uring_sqe_set_data64(accept_ms_sqe, accept_ctx);
+
+  return 0;
+}
+
 int server_add_multishot_recv(server_t *s, int fd) {
   struct io_uring_sqe *sqe = must_get_sqe(s);
-  sqe->fd = fd;
   io_uring_prep_recv_multishot(sqe, fd, NULL, 0, 0);
   io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE | IOSQE_BUFFER_SELECT);
   uint64_t recv_ctx = 0;
@@ -195,18 +212,7 @@ int server_add_multishot_recv(server_t *s, int fd) {
 }
 
 void server_ev_loop_start(server_t *s, int listener_fd) {
-  struct io_uring_sqe *accept_ms_sqe = io_uring_get_sqe(&s->ring);
-  struct sockaddr_in client_addr;
-
-  socklen_t client_addr_len = sizeof(client_addr);
-  assert(accept_ms_sqe != NULL);
-  io_uring_prep_multishot_accept_direct(accept_ms_sqe, listener_fd,
-                                        (struct sockaddr *)&client_addr,
-                                        &client_addr_len, 0);
-
-  uint64_t accept_ctx = 0;
-  set_event(&accept_ctx, EV_ACCEPT);
-  io_uring_sqe_set_data64(accept_ms_sqe, accept_ctx);
+  server_add_multishot_accept(s, listener_fd);
 
   for (;;) {
     // printf("start loop iteration\n");
@@ -249,7 +255,8 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
               io_uring_sqe_set_data64(close_sqe, close_ctx);
             }
           } else if (cqe->res == -ENOBUFS) {
-            printf("ran out of buffers for gid: %d ", get_bgid(io_uring_cqe_get_data64(cqe)));
+            printf("ran out of buffers for gid: %d ",
+                   get_bgid(io_uring_cqe_get_data64(cqe)));
             server_active_bgid_next(s);
 
             printf("moving to next buffer group id: %d\n",
