@@ -180,6 +180,15 @@ inline static char *server_get_selected_buffer(server_t *s, uint32_t bgid,
 
 inline static int server_get_active_bgid(server_t *s) { return s->active_bgid; }
 
+inline static void server_release_one_buf(server_t *s, char *buf, uint32_t bgid,
+                                          uint32_t buf_idx) {
+
+  io_uring_buf_ring_add(s->buf_rings[bgid], buf, BUFFER_SIZE, buf_idx,
+                        io_uring_buf_ring_mask(BG_ENTRIES), 0);
+
+  io_uring_buf_ring_advance(s->buf_rings[bgid], 1);
+}
+
 void server_ev_loop_start(server_t *s, int listener_fd) {
   struct io_uring_sqe *accept_ms_sqe = io_uring_get_sqe(&s->ring);
   struct sockaddr_in client_addr;
@@ -247,7 +256,7 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
               io_uring_sqe_set_data64(close_sqe, close_ctx);
             }
           } else if (cqe->res == -ENOBUFS) {
-            printf("ran out of buffers exiting...");
+            printf("ran out of buffers exiting...\n");
             exit(1);
           }
         }
@@ -255,9 +264,10 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
         else {
           unsigned int buf_id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
           uint32_t bgid = get_bgid(ctx);
-
+          printf("buffer-group: %d\tbuffer-id: %d\n", bgid, buf_id);
           char *recv_buf = server_get_selected_buffer(s, bgid, buf_id);
           printf("%s\n", recv_buf);
+          server_release_one_buf(s, recv_buf, bgid, buf_id);
         }
 
       } else if (ev == EV_SEND) {
