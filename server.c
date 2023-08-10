@@ -16,7 +16,7 @@
 #define SQ_ENTRIES 1024
 #define BUFFER_SIZE 1024 * 4
 #define BUF_RINGS 4 // must be power of 2
-#define BG_ENTRIES 1024 * 4
+#define BG_ENTRIES 4 // must be power of 2
 #define CONN_BACKLOG 256
 
 #define FD_MASK ((1ULL << 21) - 1) // 21 bits
@@ -91,11 +91,11 @@ server_t *server_init(void) {
   assert(io_uring_register_ring_fd(&s->ring) == 1);
 
   server_register_buf_rings(s);
-
   return s;
 }
+
 void server_register_buf_rings(server_t *s) {
-  unsigned int i;
+  unsigned short i;
   for (i = 0; i < BUF_RINGS; ++i) {
     char *group_buf = (char *)calloc(BG_ENTRIES * BUFFER_SIZE, sizeof(char));
     assert(group_buf != NULL);
@@ -107,23 +107,10 @@ void server_register_buf_rings(server_t *s) {
 
 struct io_uring_buf_ring *server_register_bg(server_t *s, unsigned short bgid,
                                              unsigned int entries, char *buf,
-                                             unsigned int buf_sz) {
-  struct io_uring_buf_ring *br;
-  struct io_uring_buf_reg reg = {0};
-
-  posix_memalign((void **)&br, getpagesize(),
-                 entries * sizeof(struct io_uring_buf_ring));
-
-  reg.ring_addr = (unsigned long)br;
-  reg.ring_entries = entries;
-  reg.bgid = bgid;
-
-  int ret = io_uring_register_buf_ring(&s->ring, &reg, 0);
-  if (ret != 0) {
-    printf("io_uring_register_buf_ring failed: %d\n", ret);
-    exit(1);
-  }
-
+                                             unsigned int buf_sz) {  
+  int ret;
+  struct io_uring_buf_ring *br = io_uring_setup_buf_ring(&s->ring, entries, bgid, 0, &ret);
+  assert(ret == 0);
   io_uring_buf_ring_init(br);
 
   unsigned int i;
@@ -181,7 +168,7 @@ inline static char *server_get_selected_buffer(server_t *s, uint32_t bgid,
 inline static int server_get_active_bgid(server_t *s) { return s->active_bgid; }
 
 inline static void server_active_bgid_next(server_t *s) {
-  s->active_bgid = s->active_bgid + 1 & SRV_LIM_MAX_BGS;
+  s->active_bgid = (s->active_bgid + 1) & (BUF_RINGS-1);
 }
 
 inline static void server_release_one_buf(server_t *s, char *buf, uint32_t bgid,
@@ -191,6 +178,20 @@ inline static void server_release_one_buf(server_t *s, char *buf, uint32_t bgid,
                         io_uring_buf_ring_mask(BG_ENTRIES), 0);
 
   io_uring_buf_ring_advance(s->buf_rings[bgid], 1);
+}
+
+int server_add_multishot_recv(server_t *s, int fd) {
+  struct io_uring_sqe *sqe = must_get_sqe(s);
+  sqe->fd = fd;
+  io_uring_prep_recv_multishot(sqe, fd, NULL, 0, 0);
+  io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE | IOSQE_BUFFER_SELECT);
+  uint64_t recv_ctx = 0;
+  set_event(&recv_ctx, EV_RECV);
+  set_fd(&recv_ctx, fd);
+  set_bgid(&recv_ctx, server_get_active_bgid(s));
+  io_uring_sqe_set_data64(sqe, recv_ctx);
+  sqe->buf_group = server_get_active_bgid(s);
+  return 0;
 }
 
 void server_ev_loop_start(server_t *s, int listener_fd) {
@@ -229,20 +230,8 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
           exit(1);
         }
         printf("ACCEPT %d\n", cqe->res);
-        struct io_uring_sqe *recv_ms_sqe = must_get_sqe(s);
-        s->fds[cqe->res] = FD_OPEN; // update fd status
-        recv_ms_sqe->fd = cqe->res;
-        recv_ms_sqe->buf_group = server_get_active_bgid(s);
-        io_uring_prep_recv_multishot(recv_ms_sqe, cqe->res, NULL, 0, 0);
-
-        io_uring_sqe_set_flags(recv_ms_sqe,
-                               IOSQE_FIXED_FILE | IOSQE_BUFFER_SELECT);
-
-        uint64_t recv_ctx = 0;
-        set_event(&recv_ctx, EV_RECV);
-        set_fd(&recv_ctx, cqe->res);
-        set_bgid(&recv_ctx, server_get_active_bgid(s));
-        io_uring_sqe_set_data64(recv_ms_sqe, recv_ctx);
+        s->fds[cqe->res] = FD_OPEN;
+        server_add_multishot_recv(s, cqe->res);
       } else if (ev == EV_RECV) {
         printf("RECV %d\n", cqe->res);
         if (cqe->res <= 0) {
@@ -260,8 +249,12 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
               io_uring_sqe_set_data64(close_sqe, close_ctx);
             }
           } else if (cqe->res == -ENOBUFS) {
-            printf("ran out of buffers exiting...\n");
-            exit(1);
+            printf("ran out of buffers for gid: %d ", get_bgid(io_uring_cqe_get_data64(cqe)));
+            server_active_bgid_next(s);
+
+            printf("moving to next buffer group id: %d\n",
+                   server_get_active_bgid(s));
+            server_add_multishot_recv(s, get_fd(io_uring_cqe_get_data64(cqe)));
           }
         }
         // we have data to be read
@@ -271,7 +264,7 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
           printf("buffer-group: %d\tbuffer-id: %d\n", bgid, buf_id);
           char *recv_buf = server_get_selected_buffer(s, bgid, buf_id);
           printf("%s\n", recv_buf);
-          server_release_one_buf(s, recv_buf, bgid, buf_id);
+          // server_release_one_buf(s, recv_buf, bgid, buf_id);
         }
 
       } else if (ev == EV_SEND) {
