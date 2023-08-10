@@ -211,6 +211,37 @@ int server_add_multishot_recv(server_t *s, int fd) {
   return 0;
 }
 
+void server_add_close_direct(server_t *s, uint32_t fd) {
+  if (s->fds[fd] != FD_CLOSING) {
+    struct io_uring_sqe *sqe = must_get_sqe(s);
+
+    sqe->fd = fd;
+    s->fds[fd] = FD_CLOSING;
+    io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
+    io_uring_prep_close_direct(sqe, fd);
+
+    uint64_t close_ctx = 0;
+    set_event(&close_ctx, EV_CLOSE);
+    set_fd(&close_ctx, fd);
+
+    io_uring_sqe_set_data64(sqe, close_ctx);
+  }
+}
+
+void server_handle_recv_err(server_t *s, int err, uint64_t ctx) {
+  if (err == 0) {
+    server_add_close_direct(s, get_fd(ctx));
+  } else if (err == -ENOBUFS) {
+    printf("ran out of buffers for gid: %d ", get_bgid(ctx));
+    server_active_bgid_next(s);
+    printf("moving to next buffer group id: %d\n", server_get_active_bgid(s));
+    server_add_multishot_recv(s, get_fd(ctx));
+  } else {
+    printf("RECV err: %d\n", err);
+    server_add_close_direct(s, get_fd(ctx));
+  }
+}
+
 void server_ev_loop_start(server_t *s, int listener_fd) {
   server_add_multishot_accept(s, listener_fd);
 
@@ -241,31 +272,8 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
       } else if (ev == EV_RECV) {
         printf("RECV %d\n", cqe->res);
         if (cqe->res <= 0) {
-          if (cqe->res == 0) {
-            uint32_t fd_to_close = get_fd(ctx);
-            if (s->fds[fd_to_close] != FD_CLOSING) {
-              struct io_uring_sqe *close_sqe = must_get_sqe(s);
-              close_sqe->fd = fd_to_close;
-              s->fds[fd_to_close] = FD_CLOSING;
-              io_uring_sqe_set_flags(close_sqe, IOSQE_FIXED_FILE);
-              io_uring_prep_close_direct(close_sqe, fd_to_close);
-              uint64_t close_ctx = 0;
-              set_event(&close_ctx, EV_CLOSE);
-              set_fd(&close_ctx, fd_to_close);
-              io_uring_sqe_set_data64(close_sqe, close_ctx);
-            }
-          } else if (cqe->res == -ENOBUFS) {
-            printf("ran out of buffers for gid: %d ",
-                   get_bgid(io_uring_cqe_get_data64(cqe)));
-            server_active_bgid_next(s);
-
-            printf("moving to next buffer group id: %d\n",
-                   server_get_active_bgid(s));
-            server_add_multishot_recv(s, get_fd(io_uring_cqe_get_data64(cqe)));
-          }
-        }
-        // we have data to be read
-        else {
+          server_handle_recv_err(s, cqe->res, ctx);
+        } else {
           unsigned int buf_id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
           uint32_t bgid = get_bgid(ctx);
           printf("buffer-group: %d\tbuffer-id: %d\n", bgid, buf_id);
