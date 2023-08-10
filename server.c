@@ -5,6 +5,7 @@
 #include <liburing/io_uring.h>
 #include <netinet/in.h>
 #include <signal.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,7 +13,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define MAX_FDS 1024
+#define FD_COUNT 256
 #define SQ_DEPTH 1024
 #define BUFFER_SIZE 1024 * 4
 #define BUF_RINGS 4  // must be power of 2
@@ -62,7 +63,7 @@ static inline uint8_t get_event(uint64_t data) {
 typedef struct {
   struct io_uring ring;
   struct io_uring_buf_ring *buf_rings[BUF_RINGS];
-  int fds[MAX_FDS];
+  int fds[FD_COUNT];
   int active_bgid;
 } server_t;
 
@@ -81,13 +82,13 @@ server_t *server_init(void) {
   struct io_uring_params params;
   assert(memset(&params, 0, sizeof(params)) != NULL);
 
-  assert(memset(s->fds, FD_UNUSED, sizeof(int) * MAX_FDS) != NULL);
+  assert(memset(s->fds, FD_UNUSED, sizeof(int) * FD_COUNT) != NULL);
 
   // params.cq_entries = CQ_ENTRIES; also add IORING_SETUP_CQSIZE to flags
   params.flags = IORING_SETUP_COOP_TASKRUN | IORING_SETUP_SINGLE_ISSUER;
 
   assert(io_uring_queue_init_params(SQ_DEPTH, &s->ring, &params) == 0);
-  assert(io_uring_register_files_sparse(&s->ring, MAX_FDS) == 0);
+  assert(io_uring_register_files_sparse(&s->ring, FD_COUNT) == 0);
   assert(io_uring_register_ring_fd(&s->ring) == 1);
 
   server_register_buf_rings(s);
@@ -242,6 +243,17 @@ static inline void server_handle_recv_err(server_t *s, int err, uint64_t ctx) {
   }
 }
 
+static inline void server_add_send(server_t *s, uint32_t fd, const void *data,
+                                   size_t len) {
+  struct io_uring_sqe *sqe = must_get_sqe(s);
+  io_uring_prep_send(sqe, fd, data, len, 0);
+  io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
+  uint64_t send_ctx = 0;
+  set_fd(&send_ctx, fd);
+  set_event(&send_ctx, EV_SEND);
+  io_uring_sqe_set_data64(sqe, send_ctx);
+}
+
 void server_ev_loop_start(server_t *s, int listener_fd) {
   server_add_multishot_accept(s, listener_fd);
 
@@ -270,8 +282,15 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
           uint32_t bgid = get_bgid(ctx);
           printf("buffer-group: %d\tbuffer-id: %d\n", bgid, buf_id);
           char *recv_buf = server_get_selected_buffer(s, bgid, buf_id);
-          printf("%s\n", recv_buf);
-          // server_release_one_buf(s, recv_buf, bgid, buf_id);
+
+          uint32_t sender_fd = get_fd(ctx);
+          for (size_t i = 0; i < FD_COUNT; ++i) {
+            if (s->fds[i] == FD_OPEN && i != sender_fd) {
+              server_add_send(s, i, recv_buf, cqe->res);
+            }
+          }
+
+          server_release_one_buf(s, recv_buf, bgid, buf_id);
         }
         break;
       case EV_ACCEPT:
