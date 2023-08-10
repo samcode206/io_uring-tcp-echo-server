@@ -15,9 +15,9 @@
 
 #define FD_COUNT 256
 #define SQ_DEPTH 1024
-#define BUFFER_SIZE 1024 * 4
-#define BUF_RINGS 4  // must be power of 2
-#define BG_ENTRIES 4 // must be power of 2
+#define BUFFER_SIZE 4096
+#define BUF_RINGS 32         // must be power of 2
+#define BG_ENTRIES 1024 * 32 // must be power of 2
 #define CONN_BACKLOG 256
 
 #define FD_MASK ((1ULL << 21) - 1) // 21 bits
@@ -254,6 +254,17 @@ static inline void server_add_send(server_t *s, uint32_t fd, const void *data,
   io_uring_sqe_set_data64(sqe, send_ctx);
 }
 
+static inline void server_add_send_skip_success(server_t *s, uint32_t fd,
+                                                const void *data, size_t len) {
+  struct io_uring_sqe *sqe = must_get_sqe(s);
+  io_uring_prep_send(sqe, fd, data, len, 0);
+  io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE | IOSQE_CQE_SKIP_SUCCESS);
+  uint64_t send_ctx = 0;
+  set_fd(&send_ctx, fd);
+  set_event(&send_ctx, EV_SEND);
+  io_uring_sqe_set_data64(sqe, send_ctx);
+}
+
 void server_ev_loop_start(server_t *s, int listener_fd) {
   server_add_multishot_accept(s, listener_fd);
 
@@ -277,16 +288,16 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
         if (cqe->res <= 0) {
           server_handle_recv_err(s, cqe->res, ctx);
         } else {
-          printf("RECV %d\n", cqe->res);
+          // printf("RECV %d\n", cqe->res);
           unsigned int buf_id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
           uint32_t bgid = get_bgid(ctx);
-          printf("buffer-group: %d\tbuffer-id: %d\n", bgid, buf_id);
+          // printf("buffer-group: %d\tbuffer-id: %d\n", bgid, buf_id);
           char *recv_buf = server_get_selected_buffer(s, bgid, buf_id);
 
           uint32_t sender_fd = get_fd(ctx);
           for (size_t i = 0; i < FD_COUNT; ++i) {
             if (s->fds[i] == FD_OPEN && i != sender_fd) {
-              server_add_send(s, i, recv_buf, cqe->res);
+              server_add_send_skip_success(s, i, recv_buf, cqe->res);
             }
           }
 
@@ -303,7 +314,11 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
         server_add_multishot_recv(s, cqe->res);
         break;
       case EV_SEND:
-        printf("SEND %d\n", cqe->res);
+        if (cqe->res <= 0) {
+          printf("SEND FAILURE %d\n", cqe->res);
+        } else {
+          printf("SEND %d\n", cqe->res);
+        }
         break;
       case EV_CLOSE:
         if (cqe->res == 0) {
