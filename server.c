@@ -65,12 +65,11 @@ typedef struct {
   struct io_uring_buf_ring *buf_rings[BUF_RINGS];
   int fds[FD_COUNT];
   int active_bgid;
+  char mapped_buffs[BUF_RINGS][BG_ENTRIES][BUFFER_SIZE];
 } server_t;
 
 server_t *server_init(void);
-struct io_uring_buf_ring *server_register_bg(server_t *s, unsigned short bgid,
-                                             unsigned int entries, char *buf,
-                                             unsigned int buf_sz);
+
 void server_register_buf_rings(server_t *s);
 int server_socket_bind_listen(server_t *s, int port);
 void server_ev_loop_start(server_t *s, int fd);
@@ -97,10 +96,10 @@ server_t *server_init(void) {
   // int ret = io_uring_register_iowq_max_workers(&s->ring, args);
   // assert(ret == 0);
   // memset(args, 0, sizeof(args));
-  // // call it again to get the current values after updating 
+  // // call it again to get the current values after updating
   // io_uring_register_iowq_max_workers(&s->ring, args);
-  // printf("server initialzed ring iow %d bounded: %d unbounded: %d\n", ret, args[0], args[1]);
-
+  // printf("server initialzed ring iow %d bounded: %d unbounded: %d\n", ret,
+  // args[0], args[1]);
 
   return s;
 }
@@ -108,35 +107,23 @@ server_t *server_init(void) {
 void server_register_buf_rings(server_t *s) {
   unsigned short i;
   for (i = 0; i < BUF_RINGS; ++i) {
-    char *group_buf = (char *)calloc(BG_ENTRIES * BUFFER_SIZE, sizeof(char));
-    assert(group_buf != NULL);
-    s->buf_rings[i] =
-        server_register_bg(s, i, BG_ENTRIES, group_buf, BUFFER_SIZE);
-    assert(s->buf_rings[i] != NULL);
+    int ret;
+    struct io_uring_buf_ring *br =
+        io_uring_setup_buf_ring(&s->ring, BG_ENTRIES, i, 0, &ret);
+    assert(ret == 0);
+    assert(br != NULL);
+    io_uring_buf_ring_init(br);
+
+    for (size_t j = 0; j < BG_ENTRIES; ++j) {
+      io_uring_buf_ring_add(br, s->mapped_buffs[i][j], BUFFER_SIZE, j,
+                            io_uring_buf_ring_mask(BG_ENTRIES), j);
+    }
+
+    io_uring_buf_ring_advance(br, BG_ENTRIES);
+    s->buf_rings[i] = br;
   }
 }
 
-struct io_uring_buf_ring *server_register_bg(server_t *s, unsigned short bgid,
-                                             unsigned int entries, char *buf,
-                                             unsigned int buf_sz) {
-  int ret;
-  struct io_uring_buf_ring *br =
-      io_uring_setup_buf_ring(&s->ring, entries, bgid, 0, &ret);
-  assert(ret == 0);
-  io_uring_buf_ring_init(br);
-
-  unsigned int i;
-  unsigned int offset = 0;
-  for (i = 0; i < entries; ++i) {
-    io_uring_buf_ring_add(br, buf + offset, buf_sz, i,
-                          io_uring_buf_ring_mask(entries), i);
-    offset += buf_sz;
-  }
-
-  io_uring_buf_ring_advance(br, entries);
-
-  return br;
-}
 
 int server_socket_bind_listen(server_t *s, int port) {
   int fd;
@@ -173,8 +160,7 @@ struct io_uring_sqe *must_get_sqe(server_t *s) {
 
 inline static char *server_get_selected_buffer(server_t *s, uint32_t bgid,
                                                uint32_t buf_idx) {
-  char *buf = (char *)s->buf_rings[bgid]->bufs->addr;
-  return buf + (buf_idx * (sizeof(char) * BUFFER_SIZE));
+  return s->mapped_buffs[bgid][buf_idx];
 }
 
 inline static int server_get_active_bgid(server_t *s) { return s->active_bgid; }
@@ -303,7 +289,7 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
           uint32_t bgid = get_bgid(ctx);
           // printf("buffer-group: %d\tbuffer-id: %d\n", bgid, buf_id);
           char *recv_buf = server_get_selected_buffer(s, bgid, buf_id);
-
+          printf("%s\n", recv_buf);
           uint32_t sender_fd = get_fd(ctx);
           for (size_t i = 0; i < FD_COUNT; ++i) {
             if (s->fds[i] == FD_OPEN && i != sender_fd) {
