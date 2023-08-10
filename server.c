@@ -121,7 +121,12 @@ struct io_uring_buf_ring *server_register_bg(server_t *s, unsigned short bgid,
   reg.ring_entries = entries;
   reg.bgid = bgid;
 
-  assert(io_uring_register_buf_ring(&s->ring, &reg, 0) == 0);
+  int ret = io_uring_register_buf_ring(&s->ring, &reg, 0);
+  if (ret != 0){
+    printf("io_uring_register_buf_ring failed: %d\n", ret);
+    exit(1);
+  }
+
   io_uring_buf_ring_init(br);
 
   unsigned int i;
