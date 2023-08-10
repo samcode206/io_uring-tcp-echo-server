@@ -67,6 +67,7 @@ typedef struct {
   struct io_uring ring;
   struct io_uring_buf_ring *buf_rings[BUF_RINGS];
   int fds[MAX_FDS];
+  int active_bgid;
 } server_t;
 
 server_t *server_init(void);
