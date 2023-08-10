@@ -178,9 +178,7 @@ inline static char *server_get_selected_buffer(server_t *s, uint32_t bgid,
   return buf + (buf_idx * (sizeof(char) * BUFFER_SIZE));
 }
 
-inline static void server_set_active_bgid(server_t *s, int bgid) {
-  s->active_bgid = bgid;
-}
+inline static int server_get_active_bgid(server_t *s) { return s->active_bgid; }
 
 void server_ev_loop_start(server_t *s, int listener_fd) {
   struct io_uring_sqe *accept_ms_sqe = io_uring_get_sqe(&s->ring);
@@ -221,7 +219,7 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
         struct io_uring_sqe *recv_ms_sqe = must_get_sqe(s);
         s->fds[cqe->res] = FD_OPEN; // update fd status
         recv_ms_sqe->fd = cqe->res;
-        recv_ms_sqe->buf_group = s->active_bgid;
+        recv_ms_sqe->buf_group = server_get_active_bgid(s);
         io_uring_prep_recv_multishot(recv_ms_sqe, cqe->res, NULL, 0, 0);
 
         io_uring_sqe_set_flags(recv_ms_sqe,
@@ -230,7 +228,7 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
         uint64_t recv_ctx = 0;
         set_event(&recv_ctx, EV_RECV);
         set_fd(&recv_ctx, cqe->res);
-        set_bgid(&recv_ctx, s->active_bgid);
+        set_bgid(&recv_ctx, server_get_active_bgid(s));
         io_uring_sqe_set_data64(recv_ms_sqe, recv_ctx);
       } else if (ev == EV_RECV) {
         printf("RECV %d\n", cqe->res);
