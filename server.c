@@ -14,24 +14,17 @@
 
 #define MAX_FDS 1024
 #define SQ_ENTRIES 1024
-
 #define BUFFER_SIZE 1024 * 4
 #define BUF_RINGS 4
 #define BG_ENTRIES 1024 * 4
 #define CONN_BACKLOG 256
 
-#define FD_UNUSED -1
-#define FD_CLOSING -2
-#define FD_OPEN 1
-
 #define FD_MASK ((1ULL << 21) - 1) // 21 bits
 #define FD_SHIFT 0
 #define SRV_LIM_MAX_FD 2097151
-
 #define BGID_MASK (((1ULL << 17) - 1) << 21) // 17 bits shifted by 21
 #define BGID_SHIFT 21
 #define SRV_LIM_MAX_BGS 131071
-
 #define EVENT_MASK (3ULL << 38) // 2 bits shifted by 38
 #define EVENT_SHIFT 38
 
@@ -39,6 +32,10 @@
 #define EV_RECV 1
 #define EV_SEND 2
 #define EV_CLOSE 3
+
+#define FD_UNUSED -1
+#define FD_CLOSING -2
+#define FD_OPEN 1
 
 static inline void set_fd(uint64_t *data, uint32_t fd) {
   *data = (*data & ~FD_MASK) | ((uint64_t)fd << FD_SHIFT);
@@ -122,7 +119,7 @@ struct io_uring_buf_ring *server_register_bg(server_t *s, unsigned short bgid,
   reg.bgid = bgid;
 
   int ret = io_uring_register_buf_ring(&s->ring, &reg, 0);
-  if (ret != 0){
+  if (ret != 0) {
     printf("io_uring_register_buf_ring failed: %d\n", ret);
     exit(1);
   }
@@ -181,6 +178,10 @@ inline static char *server_get_selected_buffer(server_t *s, uint32_t bgid,
   return buf + (buf_idx * (sizeof(char) * BUFFER_SIZE));
 }
 
+inline static void server_set_active_bgid(server_t *s, int bgid) {
+  s->active_bgid = bgid;
+}
+
 void server_ev_loop_start(server_t *s, int listener_fd) {
   struct io_uring_sqe *accept_ms_sqe = io_uring_get_sqe(&s->ring);
   struct sockaddr_in client_addr;
@@ -220,7 +221,7 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
         struct io_uring_sqe *recv_ms_sqe = must_get_sqe(s);
         s->fds[cqe->res] = FD_OPEN; // update fd status
         recv_ms_sqe->fd = cqe->res;
-        recv_ms_sqe->buf_group = 0; // TODO dynamically pick bg
+        recv_ms_sqe->buf_group = s->active_bgid;
         io_uring_prep_recv_multishot(recv_ms_sqe, cqe->res, NULL, 0, 0);
 
         io_uring_sqe_set_flags(recv_ms_sqe,
@@ -229,7 +230,7 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
         uint64_t recv_ctx = 0;
         set_event(&recv_ctx, EV_RECV);
         set_fd(&recv_ctx, cqe->res);
-        set_bgid(&recv_ctx, 0); // TODO dynamically pick bg
+        set_bgid(&recv_ctx, s->active_bgid);
         io_uring_sqe_set_data64(recv_ms_sqe, recv_ctx);
       } else if (ev == EV_RECV) {
         printf("RECV %d\n", cqe->res);
@@ -247,6 +248,9 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
               set_fd(&close_ctx, fd_to_close);
               io_uring_sqe_set_data64(close_sqe, close_ctx);
             }
+          } else if (cqe->res == -ENOBUFS) {
+            printf("ran out of buffers exiting...");
+            exit(1);
           }
         }
         // we have data to be read
