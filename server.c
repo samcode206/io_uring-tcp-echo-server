@@ -15,7 +15,7 @@
 #define MAX_FDS 1024
 #define SQ_ENTRIES 1024
 #define BUFFER_SIZE 1024 * 4
-#define BUF_RINGS 4
+#define BUF_RINGS 4 // must be power of 2
 #define BG_ENTRIES 1024 * 4
 #define CONN_BACKLOG 256
 
@@ -179,6 +179,10 @@ inline static char *server_get_selected_buffer(server_t *s, uint32_t bgid,
 }
 
 inline static int server_get_active_bgid(server_t *s) { return s->active_bgid; }
+
+inline static void server_active_bgid_next(server_t *s) {
+  s->active_bgid = s->active_bgid + 1 & SRV_LIM_MAX_BGS;
+}
 
 inline static void server_release_one_buf(server_t *s, char *buf, uint32_t bgid,
                                           uint32_t buf_idx) {
