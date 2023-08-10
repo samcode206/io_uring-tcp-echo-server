@@ -1,3 +1,4 @@
+#include <asm-generic/errno.h>
 #include <assert.h>
 #include <ctype.h>
 #include <fcntl.h>
@@ -5,6 +6,7 @@
 #include <liburing/io_uring.h>
 #include <netinet/in.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +20,48 @@
 #define BUF_RINGS 1
 #define BG_ENTRIES 1024 * 4
 #define CONN_BACKLOG 256
+
+#define FD_UNUSED -1
+#define FD_CLOSING -2
+#define FD_OPEN 1
+
+#define FD_MASK ((1ULL << 21) - 1) // 21 bits
+#define FD_SHIFT 0
+#define SRV_LIM_MAX_FD 2097151
+
+#define BGID_MASK (((1ULL << 17) - 1) << 21) // 17 bits shifted by 21
+#define BGID_SHIFT 21
+#define SRV_LIM_MAX_BGS 131071
+
+#define EVENT_MASK (3ULL << 38) // 2 bits shifted by 38
+#define EVENT_SHIFT 38
+
+#define EV_ACCEPT 0
+#define EV_RECV 1
+#define EV_SEND 2
+#define EV_CLOSE 3
+
+static inline void set_fd(uint64_t *data, uint32_t fd) {
+  *data = (*data & ~FD_MASK) | ((uint64_t)fd << FD_SHIFT);
+}
+
+static inline void set_bgid(uint64_t *data, uint32_t index) {
+  *data = (*data & ~BGID_MASK) | ((uint64_t)index << BGID_SHIFT);
+}
+
+static inline void set_event(uint64_t *data, uint8_t event) {
+  *data = (*data & ~EVENT_MASK) | ((uint64_t)event << EVENT_SHIFT);
+}
+
+static inline uint32_t get_fd(uint64_t data) {
+  return (data & FD_MASK) >> FD_SHIFT;
+}
+static inline uint32_t get_bgid(uint64_t data) {
+  return (data & BGID_MASK) >> BGID_SHIFT;
+}
+static inline uint8_t get_event(uint64_t data) {
+  return (data & EVENT_MASK) >> EVENT_SHIFT;
+}
 
 typedef struct {
   struct io_uring ring;
@@ -39,6 +83,8 @@ server_t *server_init(void) {
 
   struct io_uring_params params;
   assert(memset(&params, 0, sizeof(params)) != NULL);
+
+  assert(memset(s->fds, FD_UNUSED, sizeof(int) * MAX_FDS) != NULL);
 
   // params.cq_entries = CQ_ENTRIES; also add IORING_SETUP_CQSIZE to flags
   params.flags = IORING_SETUP_COOP_TASKRUN | IORING_SETUP_SINGLE_ISSUER;
@@ -109,49 +155,107 @@ int server_socket_bind_listen(server_t *s, int port) {
   return fd;
 }
 
-void server_ev_loop_start(server_t *s, int fd) {
+struct io_uring_sqe *must_get_sqe(server_t *s) {
   struct io_uring_sqe *sqe = io_uring_get_sqe(&s->ring);
+  if (!sqe) {
+    io_uring_submit(&s->ring);
+    sqe = io_uring_get_sqe(&s->ring);
+    if (!sqe) {
+      printf("failed to get an sqe shutting it down...\n");
+      exit(1);
+      return NULL;
+    }
+  }
+
+  return sqe;
+}
+
+void server_ev_loop_start(server_t *s, int listener_fd) {
+  struct io_uring_sqe *accept_ms_sqe = io_uring_get_sqe(&s->ring);
   struct sockaddr_in client_addr;
 
   socklen_t client_addr_len = sizeof(client_addr);
-  assert(sqe != NULL);
-  io_uring_prep_multishot_accept_direct(
-      sqe, fd, (struct sockaddr *)&client_addr, &client_addr_len, 0);
-  io_uring_sqe_set_data(sqe, NULL);
+  assert(accept_ms_sqe != NULL);
+  io_uring_prep_multishot_accept_direct(accept_ms_sqe, listener_fd,
+                                        (struct sockaddr *)&client_addr,
+                                        &client_addr_len, 0);
+
+  uint64_t accept_ctx = 0;
+  set_event(&accept_ctx, EV_ACCEPT);
+  io_uring_sqe_set_data64(accept_ms_sqe, accept_ctx);
 
   for (;;) {
-    io_uring_submit_and_wait(&s->ring, 1);
+    printf("start loop iteration\n");
+    int ret = io_uring_submit_and_wait(&s->ring, 1);
+    printf("io_uring_submit_and_wait: %d\n", ret);
     struct io_uring_cqe *cqe;
     unsigned head;
     unsigned i = 0;
 
     io_uring_for_each_cqe(&s->ring, head, cqe) {
       ++i;
-      void *ctx = io_uring_cqe_get_data(cqe);
-      if (!ctx) {
-        // ACCEPT
-        printf("ACCEPT %d\n", cqe->res);
-        struct io_uring_sqe *sqe = io_uring_get_sqe(&s->ring);
-        if (!sqe) {
-          io_uring_submit(&s->ring);
-          sqe = io_uring_get_sqe(&s->ring);
-          if (!sqe) {
-            printf("failed to get an sqe...\n");
-            exit(1);
-          }
-        }
-        sqe->fd = fd;
-        sqe->buf_group = 0;
-        io_uring_prep_recv_multishot(sqe, cqe->res, NULL, 0, 0);
-        io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE | IOSQE_BUFFER_SELECT);
-        
-        io_uring_sqe_set_data(sqe, (void *)1);
-      } else if (ctx == (void *)1) {
-        printf("RECV %d\n", cqe->res);
+      uint64_t ctx = io_uring_cqe_get_data64(cqe);
+      uint8_t ev = get_event(ctx);
 
+      if (ev == EV_ACCEPT) {
+        // ACCEPT
+        if (cqe->res < 0) {
+          printf("accept error: %d exiting...\n", cqe->res);
+          exit(1);
+        }
+        printf("ACCEPT %d\n", cqe->res);
+        struct io_uring_sqe *recv_ms_sqe = must_get_sqe(s);
+        s->fds[cqe->res] = FD_OPEN; // update fd status
+        recv_ms_sqe->fd = cqe->res;
+        recv_ms_sqe->buf_group = 0; // TODO dynamically pick bg
+        io_uring_prep_recv_multishot(recv_ms_sqe, cqe->res, NULL, 0, 0);
+
+        io_uring_sqe_set_flags(recv_ms_sqe,
+                               IOSQE_FIXED_FILE | IOSQE_BUFFER_SELECT);
+
+        uint64_t recv_ctx = 0;
+        set_event(&recv_ctx, EV_RECV);
+        set_fd(&recv_ctx, cqe->res);
+        set_bgid(&recv_ctx, 0); // TODO dynamically pick bg
+        io_uring_sqe_set_data64(recv_ms_sqe, recv_ctx);
+      } 
+      else if (ev == EV_RECV) {
+        printf("RECV %d\n", cqe->res);
+        if (cqe->res <= 0) {
+          if (cqe->res == 0) {
+
+            uint32_t fd_to_close = get_fd(ctx);
+            printf("closing fd: %d\n", fd_to_close);
+            if (s->fds[fd_to_close] != FD_CLOSING) {
+              struct io_uring_sqe *close_sqe = must_get_sqe(s);
+              close_sqe->fd = fd_to_close;
+              s->fds[fd_to_close] = FD_CLOSING;
+              io_uring_sqe_set_flags(close_sqe, IOSQE_FIXED_FILE);
+              io_uring_prep_close(close_sqe, fd_to_close);
+              uint64_t close_ctx = 0;
+              set_event(&close_ctx, EV_CLOSE);
+              set_fd(&close_ctx, fd_to_close);
+              io_uring_sqe_set_data64(close_sqe, close_ctx);
+            }
+          }
+
+        }
+
+      } else if (ev == EV_SEND) {
+        printf("SEND %d\n", cqe->res);
+      } else if (ev == EV_CLOSE) {
+        printf("CLOSE %d\n", cqe->res);
+        if (cqe->res == 0) {
+          uint32_t closed_fd = get_fd(ctx);
+          printf("file closed %d\n", closed_fd);
+          s->fds[closed_fd] = FD_UNUSED;
+        }
+
+      } else {
+        printf("here\n");
       }
     };
-
+    printf("end loop iteration cqes seen %d\n", i);
     io_uring_cq_advance(&s->ring, i);
   }
 }
