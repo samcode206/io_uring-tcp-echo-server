@@ -185,9 +185,11 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
   io_uring_sqe_set_data64(accept_ms_sqe, accept_ctx);
 
   for (;;) {
-    printf("start loop iteration\n");
+    // printf("start loop iteration\n");
     int ret = io_uring_submit_and_wait(&s->ring, 1);
-    printf("io_uring_submit_and_wait: %d\n", ret);
+    assert(ret >= 0); // todo remove and add real error handling
+
+    // printf("io_uring_submit_and_wait: %d\n", ret);
     struct io_uring_cqe *cqe;
     unsigned head;
     unsigned i = 0;
@@ -218,27 +220,31 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
         set_fd(&recv_ctx, cqe->res);
         set_bgid(&recv_ctx, 0); // TODO dynamically pick bg
         io_uring_sqe_set_data64(recv_ms_sqe, recv_ctx);
-      } 
-      else if (ev == EV_RECV) {
+      } else if (ev == EV_RECV) {
         printf("RECV %d\n", cqe->res);
         if (cqe->res <= 0) {
           if (cqe->res == 0) {
-
             uint32_t fd_to_close = get_fd(ctx);
-            printf("closing fd: %d\n", fd_to_close);
             if (s->fds[fd_to_close] != FD_CLOSING) {
               struct io_uring_sqe *close_sqe = must_get_sqe(s);
               close_sqe->fd = fd_to_close;
               s->fds[fd_to_close] = FD_CLOSING;
               io_uring_sqe_set_flags(close_sqe, IOSQE_FIXED_FILE);
-              io_uring_prep_close_direct(close_sqe,fd_to_close);
+              io_uring_prep_close_direct(close_sqe, fd_to_close);
               uint64_t close_ctx = 0;
               set_event(&close_ctx, EV_CLOSE);
               set_fd(&close_ctx, fd_to_close);
               io_uring_sqe_set_data64(close_sqe, close_ctx);
             }
           }
+        }
+        // we have data to be read
+        else {
+          unsigned int buf_id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
+          uint32_t bgid = get_bgid(ctx);
 
+          void *buf = (void *)s->buf_rings[bgid]->bufs->addr;
+          printf("%s\n", (char *)buf + (buf_id * (sizeof(char) * BUFFER_SIZE)));
         }
 
       } else if (ev == EV_SEND) {
@@ -255,7 +261,7 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
         printf("here\n");
       }
     };
-    printf("end loop iteration cqes seen %d\n", i);
+    // printf("end loop iteration cqes seen %d\n", i);
     io_uring_cq_advance(&s->ring, i);
   }
 }
