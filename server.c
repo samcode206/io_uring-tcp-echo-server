@@ -231,7 +231,7 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
               close_sqe->fd = fd_to_close;
               s->fds[fd_to_close] = FD_CLOSING;
               io_uring_sqe_set_flags(close_sqe, IOSQE_FIXED_FILE);
-              io_uring_prep_close(close_sqe, fd_to_close);
+              io_uring_prep_close_direct(close_sqe,fd_to_close);
               uint64_t close_ctx = 0;
               set_event(&close_ctx, EV_CLOSE);
               set_fd(&close_ctx, fd_to_close);
