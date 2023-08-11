@@ -14,11 +14,11 @@
 #include <unistd.h>
 // #include <sys/mman.h>
 
-#define FD_COUNT 256
+#define FD_COUNT 64
 #define SQ_DEPTH 1024
 #define BUFFER_SIZE 4096
-#define BUF_RINGS 16         // must be power of 2
-#define BG_ENTRIES 1024 * 32 // must be power of 2
+#define BUF_RINGS 1024 // must be power of 2
+#define BG_ENTRIES 512 // must be power of 2
 #define CONN_BACKLOG 256
 
 #define FD_MASK ((1ULL << 21) - 1) // 21 bits
@@ -92,7 +92,9 @@ server_t *server_init(void) {
   assert(memset(s->fds, FD_UNUSED, sizeof(int) * FD_COUNT) != NULL);
 
   // params.cq_entries = CQ_ENTRIES; also add IORING_SETUP_CQSIZE to flags
-  params.flags = IORING_SETUP_COOP_TASKRUN | IORING_SETUP_SINGLE_ISSUER;
+  params.flags = IORING_SETUP_COOP_TASKRUN | IORING_SETUP_SINGLE_ISSUER |
+                 IORING_SETUP_SUBMIT_ALL | IORING_SETUP_TASKRUN_FLAG |
+                 IORING_SETUP_DEFER_TASKRUN;
 
   assert(io_uring_queue_init_params(SQ_DEPTH, &s->ring, &params) == 0);
   assert(io_uring_register_files_sparse(&s->ring, FD_COUNT) == 0);
@@ -131,7 +133,6 @@ void server_register_buf_rings(server_t *s) {
     s->buf_rings[i] = br;
   }
 }
-
 
 int server_socket_bind_listen(server_t *s, int port) {
   int fd;
@@ -237,9 +238,10 @@ static inline void server_handle_recv_err(server_t *s, int err, uint64_t ctx) {
   if (err == 0) {
     server_add_close_direct(s, get_fd(ctx));
   } else if (err == -ENOBUFS) {
-    printf("ran out of buffers for gid: %d ", get_bgid(ctx));
+    // printf("ran out of buffers for gid: %d ", get_bgid(ctx));
     server_active_bgid_next(s);
-    printf("moving to next buffer group id: %d\n", server_get_active_bgid(s));
+    // printf("moving to next buffer group id: %d\n",
+    // server_get_active_bgid(s));
     server_add_multishot_recv(s, get_fd(ctx));
   } else {
     printf("RECV err: %d\n", err);
