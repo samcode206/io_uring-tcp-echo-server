@@ -12,11 +12,12 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+// #include <sys/mman.h>
 
 #define FD_COUNT 256
 #define SQ_DEPTH 1024
 #define BUFFER_SIZE 4096
-#define BUF_RINGS 32         // must be power of 2
+#define BUF_RINGS 16         // must be power of 2
 #define BG_ENTRIES 1024 * 32 // must be power of 2
 #define CONN_BACKLOG 256
 
@@ -75,7 +76,7 @@ int server_socket_bind_listen(server_t *s, int port);
 void server_ev_loop_start(server_t *s, int fd);
 
 server_t *server_init(void) {
-  //   server_t *s = mmap(NULL, sizeof(server_t), PROT_READ | PROT_WRITE,
+  // server_t *s = mmap(NULL, sizeof(server_t), PROT_READ | PROT_WRITE,
   //                    MAP_ANONYMOUS | MAP_SHARED | MAP_HUGETLB , -1, 0);
   // if (s == MAP_FAILED) {
   //   perror("mmap");
@@ -296,7 +297,7 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
           uint32_t bgid = get_bgid(ctx);
           // printf("buffer-group: %d\tbuffer-id: %d\n", bgid, buf_id);
           char *recv_buf = server_get_selected_buffer(s, bgid, buf_id);
-          printf("%s\n", recv_buf);
+          // printf("%s\n", recv_buf);
           uint32_t sender_fd = get_fd(ctx);
           for (size_t i = 0; i < FD_COUNT; ++i) {
             if (s->fds[i] == FD_OPEN && i != sender_fd) {
