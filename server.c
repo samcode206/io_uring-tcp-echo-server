@@ -75,6 +75,13 @@ int server_socket_bind_listen(server_t *s, int port);
 void server_ev_loop_start(server_t *s, int fd);
 
 server_t *server_init(void) {
+  //   server_t *s = mmap(NULL, sizeof(server_t), PROT_READ | PROT_WRITE,
+  //                    MAP_ANONYMOUS | MAP_SHARED | MAP_HUGETLB , -1, 0);
+  // if (s == MAP_FAILED) {
+  //   perror("mmap");
+  //   exit(1);
+  // }
+
   server_t *s = (server_t *)calloc(1, sizeof(server_t));
   assert(s != NULL);
 
