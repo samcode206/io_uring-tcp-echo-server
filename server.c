@@ -14,7 +14,7 @@
 #include <unistd.h>
 // #include <sys/mman.h>
 
-#define FD_COUNT 64
+#define FD_COUNT 1024
 #define SQ_DEPTH 1024
 #define BUFFER_SIZE 4096
 #define BUF_RINGS 1024 // must be power of 2
@@ -102,14 +102,14 @@ server_t *server_init(void) {
 
   server_register_buf_rings(s);
 
-  // unsigned int args[2] =  {0, 32};
-  // int ret = io_uring_register_iowq_max_workers(&s->ring, args);
-  // assert(ret == 0);
-  // memset(args, 0, sizeof(args));
-  // // call it again to get the current values after updating
-  // io_uring_register_iowq_max_workers(&s->ring, args);
-  // printf("server initialzed ring iow %d bounded: %d unbounded: %d\n", ret,
-  // args[0], args[1]);
+  unsigned int args[2] =  {0, 32};
+  int ret = io_uring_register_iowq_max_workers(&s->ring, args);
+  assert(ret == 0);
+  memset(args, 0, sizeof(args));
+  // call it again to get the current values after updating
+  io_uring_register_iowq_max_workers(&s->ring, args);
+  printf("server initialzed ring iow %d bounded: %d unbounded: %d\n", ret,
+  args[0], args[1]);
 
   return s;
 }
@@ -250,21 +250,11 @@ static inline void server_handle_recv_err(server_t *s, int err, uint64_t ctx) {
 }
 
 static inline void server_add_send(server_t *s, uint32_t fd, const void *data,
-                                   size_t len) {
+                                   size_t len, uint32_t sqe_flags,
+                                   uint32_t send_flags) {
   struct io_uring_sqe *sqe = must_get_sqe(s);
-  io_uring_prep_send(sqe, fd, data, len, 0);
-  io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
-  uint64_t send_ctx = 0;
-  set_fd(&send_ctx, fd);
-  set_event(&send_ctx, EV_SEND);
-  io_uring_sqe_set_data64(sqe, send_ctx);
-}
-
-static inline void server_add_send_skip_success(server_t *s, uint32_t fd,
-                                                const void *data, size_t len) {
-  struct io_uring_sqe *sqe = must_get_sqe(s);
-  io_uring_prep_send(sqe, fd, data, len, 0);
-  io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE | IOSQE_CQE_SKIP_SUCCESS);
+  io_uring_prep_send(sqe, fd, data, len, send_flags);
+  io_uring_sqe_set_flags(sqe, sqe_flags);
   uint64_t send_ctx = 0;
   set_fd(&send_ctx, fd);
   set_event(&send_ctx, EV_SEND);
@@ -301,10 +291,9 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
           char *recv_buf = server_get_selected_buffer(s, bgid, buf_id);
           // printf("%s\n", recv_buf);
           uint32_t sender_fd = get_fd(ctx);
-          for (size_t i = 0; i < FD_COUNT; ++i) {
-            if (s->fds[i] == FD_OPEN && i != sender_fd) {
-              server_add_send_skip_success(s, i, recv_buf, cqe->res);
-            }
+          if (s->fds[sender_fd] == FD_OPEN) {
+            server_add_send(s, sender_fd, recv_buf, cqe->res,
+                            IOSQE_FIXED_FILE | IOSQE_CQE_SKIP_SUCCESS, 0);
           }
 
           server_release_one_buf(s, recv_buf, bgid, buf_id);
@@ -315,7 +304,7 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
           printf("accept error: %d exiting...\n", cqe->res);
           exit(1);
         }
-        printf("ACCEPT %d\n", cqe->res);
+        // printf("ACCEPT %d\n", cqe->res);
         s->fds[cqe->res] = FD_OPEN;
         server_add_multishot_recv(s, cqe->res);
         break;
@@ -329,7 +318,7 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
       case EV_CLOSE:
         if (cqe->res == 0) {
           uint32_t closed_fd = get_fd(ctx);
-          printf("file closed %d\n", closed_fd);
+          // printf("file closed %d\n", closed_fd);
           s->fds[closed_fd] = FD_UNUSED;
         } else {
           printf("close error: %d\n", cqe->res);
