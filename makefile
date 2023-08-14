@@ -1,2 +1,2 @@
 build:
-	gcc broadcast.c -Wall -pedantic -o broadcast -L usr/local/lib -luring
+	gcc server.c -Wall -pedantic -O3 -o server -L usr/local/lib -luring
