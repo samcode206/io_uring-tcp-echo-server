@@ -102,14 +102,14 @@ server_t *server_init(void) {
 
   server_register_buf_rings(s);
 
-  unsigned int args[2] =  {0, 32};
+  unsigned int args[2] = {0, 32};
   int ret = io_uring_register_iowq_max_workers(&s->ring, args);
   assert(ret == 0);
   memset(args, 0, sizeof(args));
   // call it again to get the current values after updating
   io_uring_register_iowq_max_workers(&s->ring, args);
   printf("server initialzed ring iow %d bounded: %d unbounded: %d\n", ret,
-  args[0], args[1]);
+         args[0], args[1]);
 
   return s;
 }
@@ -237,7 +237,8 @@ void server_add_close_direct(server_t *s, uint32_t fd) {
 static inline void server_handle_recv_err(server_t *s, int err, uint64_t ctx) {
   if (err == 0) {
     server_add_close_direct(s, get_fd(ctx));
-  } else if (err == -ENOBUFS) {
+  } else if (err == -ENOBUFS) { // NOTE: this would keep spinning if all groups
+                                // have no buffers, might wanna add a limit
     // printf("ran out of buffers for gid: %d ", get_bgid(ctx));
     server_active_bgid_next(s);
     // printf("moving to next buffer group id: %d\n",
@@ -335,7 +336,7 @@ int main(void) {
   server_t *s = server_init();
   assert(s != NULL);
   int fd = server_socket_bind_listen(s, 9919);
-  printf("server starting on port: %d\n", 9919);
+  printf("io_uring backed TCP echo server starting on port: %d\n", 9919);
   server_ev_loop_start(s, fd);
 
   close(fd);
