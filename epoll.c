@@ -137,6 +137,12 @@ void server_start(int sfd) {
             if (n == EAGAIN || n == EWOULDBLOCK) {
               break;
             }
+            if (epoll_ctl(epoll_fd, EPOLL_CTL_DEL, events[i].data.fd,
+                          &events[i]) < 0) {
+              perror("epoll_ctl()");
+              exit(1);
+            };
+
             close(events[i].data.fd);
           } else {
             int ret = send(events[i].data.fd, data, n, MSG_DONTWAIT);
@@ -144,9 +150,14 @@ void server_start(int sfd) {
               perror("send()");
             }
           }
-        } else if (events[i].events & EPOLLRDHUP) {
-          close(events[i].data.fd);
-        } else if (events[i].events & EPOLLHUP) {
+        } else if ((events[i].events & EPOLLRDHUP) ||
+                   (events[i].events & EPOLLHUP)) {
+          if (epoll_ctl(epoll_fd, EPOLL_CTL_DEL, events[i].data.fd,
+                        &events[i]) < 0) {
+            perror("epoll_ctl()");
+            exit(1);
+          };
+
           close(events[i].data.fd);
         }
       }
