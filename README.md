@@ -1,5 +1,5 @@
 # io_uring-tcp-echo-server
-IO_URING backed TCP echo server written in C. 
+IO_URING backed TCP echo server
 
 - Linux Kernel 6.1 >= required
 - [liburing](https://github.com/axboe/liburing)
