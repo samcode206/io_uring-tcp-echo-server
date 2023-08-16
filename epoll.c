@@ -134,7 +134,7 @@ void server_start(int sfd) {
         if (events[i].events & EPOLLIN) {
           ssize_t n = recv(events[i].data.fd, data, BUF_SZ, 0);
           if (n <= 0) {
-            if (n == EAGAIN || n == EWOULDBLOCK) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
               break;
             }
             if (epoll_ctl(epoll_fd, EPOLL_CTL_DEL, events[i].data.fd,
