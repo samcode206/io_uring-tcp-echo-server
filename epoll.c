@@ -1,7 +1,9 @@
+#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -17,6 +19,18 @@
 #define BUF_SZ 1024 * 64
 
 #define MAX_EVENTS 1024
+
+#define IS_SERVER_FD_EVENT(e, sfd) ((e).data.fd == (sfd))
+
+struct conn {
+  int fd;
+
+  bool readable;
+  bool writeable;
+
+  ssize_t off_buf;
+  char buf[BUF_SZ];
+};
 
 int set_non_blocking(int fd) {
   int flags = fcntl(fd, F_GETFL, 0);
@@ -75,28 +89,121 @@ int server_nb_socket_bind_listen() {
 }
 
 // accept connection and add to epoll interest list
-void server_accept_epoll_ctl_add(int server_fd, int epoll_fd,
-                                 struct epoll_event *ev,
-                                 struct sockaddr *client_addr,
-                                 socklen_t addr_size) {
+struct conn *server_accept_epoll_ctl_add(int server_fd, int epoll_fd,
+                                         struct epoll_event *ev,
+                                         struct sockaddr *client_addr,
+                                         socklen_t addr_size) {
   int fd = accept(server_fd, client_addr, &addr_size);
   if (fd < 0) {
     perror("accept()");
     exit(1);
   }
 
+  struct conn *c = malloc(sizeof(struct conn));
+  if (!c) {
+    printf("out of memory\n");
+    exit(1);
+  }
+
+  c->fd = fd;
+  c->readable = 1;
+  c->writeable = 1;
+  c->off_buf = 0;
+
   if (set_non_blocking(fd) < 0) {
     perror("set_non_blocking()");
     exit(1);
   }
 
-  ev->events = EPOLLIN | EPOLLET | EPOLLRDHUP;
-  ev->data.fd = fd;
+  ev->events = EPOLLIN | EPOLLET;
+  ev->data.ptr = c;
 
   if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, ev) < 0) {
     perror("epoll_ctl()");
     exit(1);
   };
+
+  return c;
+}
+
+void conn_echo_all(int epfd, struct epoll_event *ev) {
+  struct conn *c = ev->data.ptr;
+  c->readable = 1;
+  while (c->readable || (c->off_buf && c->writeable)) {
+    if (c->readable) {
+      int nr = recv(c->fd, c->buf + c->off_buf, BUF_SZ - c->off_buf, 0);
+      if (nr <= 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+          // done for now
+          c->readable = 0;
+        } else {
+          // close
+          perror("recv()");
+          exit(1);
+        }
+      } else {
+        c->off_buf += nr;
+      }
+    }
+
+    if (c->off_buf && c->writeable) {
+      int nw = send(c->fd, c->buf, c->off_buf, 0);
+      if (nw <= 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+          c->writeable = 0;
+
+          ev->events = EPOLLOUT | EPOLLET;
+          if (epoll_ctl(epfd, EPOLL_CTL_MOD, c->fd, ev) < 0) {
+            perror("epoll_ctl()");
+            exit(1);
+          };
+
+        } else {
+          // close
+          perror("send()");
+          exit(1);
+        }
+      } else {
+        c->off_buf -= nw;
+        // printf("wrote: %d left %zu\n", nw, c->off_buf);
+      }
+    }
+  }
+}
+
+void conn_resume_send(int epfd, struct epoll_event *ev) {
+  struct conn *c = ev->data.ptr;
+  c->writeable = 1;
+
+  bool enable_read = 1;
+
+  while (c->off_buf && c->writeable) {
+    int nw = send(c->fd, c->buf, c->off_buf, 0);
+    if (nw <= 0) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        c->writeable = 0;
+        enable_read = 0;
+        ev->events = EPOLLOUT | EPOLLET;
+        if (epoll_ctl(epfd, EPOLL_CTL_MOD, c->fd, ev) < 0) {
+          perror("epoll_ctl()");
+          exit(1);
+        };
+
+      } else {
+        // close
+        perror("send()");
+        exit(1);
+      }
+    } else {
+      c->off_buf -= nw;
+      // printf("wrote: %d left %zu\n", nw, c->off_buf);
+    }
+  }
+
+  if (enable_read) {
+    ev->events = EPOLLIN | EPOLLET;
+    epoll_ctl(epfd, EPOLL_CTL_MOD, c->fd, ev);
+  }
 }
 
 void server_start(int sfd) {
@@ -106,20 +213,21 @@ void server_start(int sfd) {
     exit(1);
   }
 
-  char data[BUF_SZ];
   struct epoll_event events[MAX_EVENTS];
-  events[0].events = EPOLLIN;
-  events[0].data.fd = sfd;
+
+  struct epoll_event ev;
+
+  ev.events = EPOLLIN;
+  ev.data.fd = sfd;
   struct sockaddr_storage client_addr;
   socklen_t addr_size;
   addr_size = sizeof client_addr;
-  if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, sfd, &events[0]) < 0) {
+  if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, sfd, &ev) < 0) {
     perror("epoll_ctl()");
     exit(1);
   };
 
   for (;;) {
-
     int n_events = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
     if (n_events < 0) {
       perror("epoll_wait()");
@@ -127,41 +235,17 @@ void server_start(int sfd) {
     }
 
     for (int i = 0; i < n_events; ++i) {
-      if (events[i].data.fd == sfd) {
-        server_accept_epoll_ctl_add(sfd, epoll_fd, &events[i],
+      if (IS_SERVER_FD_EVENT(events[i], sfd)) {
+        server_accept_epoll_ctl_add(sfd, epoll_fd, &ev,
                                     (struct sockaddr *)&client_addr, addr_size);
-      } else {
-        if (events[i].events & EPOLLIN) {
-          ssize_t n = recv(events[i].data.fd, data, BUF_SZ, 0);
-          if (n <= 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-              break;
-            }
-            if (epoll_ctl(epoll_fd, EPOLL_CTL_DEL, events[i].data.fd,
-                          &events[i]) < 0) {
-              perror("epoll_ctl()");
-              exit(1);
-            };
-
-            close(events[i].data.fd);
-          } else {
-            int ret = send(events[i].data.fd, data, n, MSG_DONTWAIT);
-            if (ret <= 0) {
-              perror("send()");
-            }
-          }
-        } else if ((events[i].events & EPOLLRDHUP) ||
-                   (events[i].events & EPOLLHUP)) {
-          if (epoll_ctl(epoll_fd, EPOLL_CTL_DEL, events[i].data.fd,
-                        &events[i]) < 0) {
-            perror("epoll_ctl()");
-            exit(1);
-          };
-
-          close(events[i].data.fd);
-        }
+      } else if (events[i].events & EPOLLHUP) {
+        printf("EPOLLHUP\n");
+      } else if (events[i].events & EPOLLIN) {
+        conn_echo_all(epoll_fd, &events[i]);
+      } else if (events[i].events & EPOLLOUT) {
+        conn_resume_send(epoll_fd, &events[i]);
       }
-    };
+    }
   }
 
   printf("shutting down...\n");
