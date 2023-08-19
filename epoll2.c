@@ -331,10 +331,9 @@ void server_event_loop_init(server_t *s) {
         conn_set_event(c, ECONN_READABLE);
         assert(server_evq_add_evqe(s, c));
       } else if (cur_ev.events & EPOLLOUT) {
-        // assert(server_evq_add_evqe(s, &s->conns[cur_ev.data.fd],
-        //                            s->conns[cur_ev.data.fd].readable ? ERW
-        //                                                              :
-        //                                                              EWRITE));
+        conn_t *c = &s->conns[cur_ev.data.fd];
+        conn_set_event(c, ECONN_WRITEABLE);
+        assert(server_evq_add_evqe(s, c));
       }
     }
 
