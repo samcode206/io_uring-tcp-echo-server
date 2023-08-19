@@ -225,8 +225,34 @@ void server_must_epoll_ctl(int epfd, int op, int fd, struct epoll_event *ev) {
   };
 }
 
-static inline int server_conn_recv(conn_t *c) {
+/* conn_can_read returns true only if conn_t c has ECONN_READABLE event set and
+ * there's space in c->buf to write into */
+static inline bool conn_can_read(conn_t *c) {
+  return conn_check_event(c, ECONN_READABLE) && (BUF_SZ - c->off_buf > 0);
+}
+
+/* conn_can_write returns true only if conn_t c has ECONN_WRITEABLE event set
+ * and there's data to be flushed in c->buf */
+static inline bool conn_can_write(conn_t *c) {
+  return conn_check_event(c, ECONN_WRITEABLE) && c->off_buf > 0;
+}
+
+/*
+  conn_recv reads data from c->fd storing it in c->buf it modifies c->events
+  accordingly.
+  if the entire space of c->buf is filled and no error is encountered 1 is
+  returned if an error is encountered while reading that is not related to being
+  blocking due to an empty receive buffer -1 is returned and ECONN_SHOULD_CLOSE
+  is set in c->events if the receive buffer is drained and c->buf couldn't be
+  filled 0 is returned and ECONN_READABLE is unset
+  note*:
+  Caller MUST ensure that c->fd is valid & c->buf has space to write into if no
+  space is available in c->buf 0 is returned but ECONN_READABLE will remain set
+  in c->events
+ */
+static int conn_recv(conn_t *c) {
   assert(conn_check_event(c, ECONN_READABLE));
+  assert(c->fd != 0);
 
   int to_read = BUF_SZ - c->off_buf;
   assert(to_read >= 0);
@@ -249,6 +275,9 @@ static inline int server_conn_recv(conn_t *c) {
     }
   }
 
+  c->off_buf += nr;
+  assert(c->off_buf < BUF_SZ);
+
   if (nr < to_read) {
     conn_unset_event(c, ECONN_READABLE);
     return 0; // there's no more to read
@@ -257,11 +286,77 @@ static inline int server_conn_recv(conn_t *c) {
   }
 }
 
-void server_conn_read_write_limited(server_t *s, conn_t *c, uint n_loops,
-                                    size_t n_bytes) {
-  while (conn_check_event(c, ECONN_READABLE)) {
-    int nr = recv(c->fd, c->buf + c->off_buf, BUF_SZ - c->off_buf, 0);
+/*
+  conn_send writes data to c->fd from c->buf it modifies c->events accordingly
+  if the full payload in c->buf is written and no error is encountered 1 is
+  returned if some of the payload is written but draining c->buf wasn't possible
+  0 is returned and ECONN_WRITEABLE is unset from c->events
+  if an error is encountered other than EAGAIN -1 is returned and
+  ECONN_SHOULD_CLOSE is set in c->events
+  note*:
+  Caller MUST ensure that c->fd is valid & c->buf has something to be written
+  if nothing is to be written 0 is returned and no modifications occur to
+  provided conn_t
+ */
+static int conn_send(conn_t *c) {
+  assert(conn_check_event(c, ECONN_WRITEABLE));
+  assert(c->fd != 0);
+
+  if (c->off_buf == 0) {
+    return 0; // nothing to write
   }
+
+  int nw = send(c->fd, c->buf, c->off_buf, 0);
+  if (nw <= 0) {
+    if (!(errno == EAGAIN || errno == EWOULDBLOCK) || nw == 0) {
+      c->events = 0;
+      conn_set_event(c, ECONN_SHOULD_CLOSE);
+      // client disconnected or an other error that should cause conn_t to close
+      perror("send()");
+      return -1;
+    } else {
+      // no more to read for now
+      conn_unset_event(c, ECONN_WRITEABLE);
+      return 0;
+    }
+  }
+
+  c->off_buf -= nw;
+  assert(c->off_buf <
+         BUF_SZ); // ensure on wrap around from subtracting int - size_t
+
+  if (c->off_buf) {
+    conn_unset_event(c, ECONN_WRITEABLE);
+    return 0; // we can't write more for now
+  } else {
+    return 1;
+  }
+}
+
+static int server_conn_read_write_limited(server_t *s, conn_t *c,
+                                          uint n_loops) {
+  uint i = 0;
+  bool ok = true;
+  while (ok && (i++ < n_loops)) {
+
+    if (conn_can_read(c)) {
+      int r_ret = conn_recv(c);
+      if (r_ret == -1) {
+        return -1;
+      }
+    }
+
+    if (conn_can_write(c)) {
+      int w_ret = conn_send(c);
+      if (w_ret == -1) {
+        return -1;
+      }
+    }
+
+    ok = conn_can_read(c) || conn_can_write(c);
+  }
+
+  return 0;
 }
 
 void server_event_loop_init(server_t *s) {
