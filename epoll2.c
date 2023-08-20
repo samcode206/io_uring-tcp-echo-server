@@ -18,8 +18,8 @@
 #define BACKLOG 100
 #define BUF_SZ 1024 * 64
 
-#define MAX_EVENTS 1024 * 4
-#define MAX_CONNS 1024 + 4
+#define MAX_EVENTS 1024
+#define MAX_CONNS 1024
 
 #define ECONN_READABLE (1 << 0)  // 0001
 #define ECONN_WRITEABLE (1 << 1) // 0010
@@ -28,24 +28,22 @@
 
 typedef struct {
   int events;
-
   int fd;
+  uint n_qe;
   ssize_t off_buf;
   char buf[BUF_SZ];
-  uint n_qe;
-
 } conn_t;
 
 typedef struct {
   int server_fd;
   int ep_fd;
-  struct epoll_event ep_evs[MAX_EVENTS];
-  conn_t conns[MAX_CONNS];
   size_t num_cons;
 
-  conn_t *ev_q[MAX_EVENTS];
   size_t ev_q_head;
   size_t ev_q_tail;
+  conn_t *ev_q[MAX_EVENTS];
+  conn_t conns[MAX_CONNS];
+  struct epoll_event ep_evs[MAX_EVENTS];
 
 } server_t;
 
@@ -103,35 +101,37 @@ static conn_t *server_evq_add_evqe(server_t *s, conn_t *c) {
     assert(c->n_qe == 1);
     return c;
   }
-  printf("t: %zu h: %zu\n", s->ev_q_tail, s->ev_q_head);
   return NULL;
 }
 
-static int server_evq_delete_evqe(server_t *s) {
-  printf("t: %zu h: %zu\n", s->ev_q_tail, s->ev_q_head);
+static inline bool server_evq_is_empty(server_t *s) {
   if ((server_evq_get_tail(s) == server_evq_get_head(s))) {
-    return -1;
+    return 1;
   }
+  return 0;
+}
+
+static void server_evq_delete_evqe(server_t *s) {
   size_t tail = server_evq_get_tail(s);
   assert(s->ev_q[tail] != NULL);
   assert(s->ev_q[tail]->n_qe == 1);
   s->ev_q[tail]->n_qe = 0;
   s->ev_q[tail] = NULL;
   server_evq_move_tail(s, 1);
-
-  printf("t: %zu h: %zu\n", s->ev_q_tail, s->ev_q_head);
-  return 1;
 }
 
 // takes event at tail and moves it to head
-static int server_evq_readd_evqe(server_t *s) {
+static void server_evq_readd_evqe(server_t *s) {
   conn_t *c = s->ev_q[server_evq_get_tail(s)];
-  assert(c != NULL);
 
-  assert(server_evq_delete_evqe(s) == 1);
-  assert(server_evq_add_evqe(s, c) != NULL);
+  size_t tail = server_evq_get_tail(s);
+  s->ev_q[tail]->n_qe = 0;
+  s->ev_q[tail] = NULL;
+  server_evq_move_tail(s, 1);
 
-  return 0;
+  s->ev_q[server_evq_get_head(s)] = c;
+  server_evq_move_head(s, 1);
+  ++c->n_qe;
 }
 
 void conn_set_event(conn_t *c, int ev_mask) { c->events |= ev_mask; }
@@ -516,11 +516,11 @@ void server_event_loop_init(server_t *s) {
                   server_must_epoll_ctl(epfd, EPOLL_CTL_MOD, qe->fd, &ev);
                 }
                 assert(qe->fd != 0);
-                assert(server_evq_delete_evqe(s) != -1);
+                server_evq_delete_evqe(s);
               }
             } else {
               // success
-              assert(server_evq_readd_evqe(s) == 0);
+              server_evq_readd_evqe(s);
             }
           } else if (conn_check_event(qe, ECONN_WRITEABLE)) {
             int ret = conn_send(qe);
