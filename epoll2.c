@@ -21,10 +21,10 @@
 #define MAX_EVENTS 4096
 #define MAX_CONNS 1024 + 4
 
-#define ECONN_READABLE (1 << 0)                     // 0001
-#define ECONN_WRITEABLE (1 << 1)                    // 0010
-#define ECONN_RW (ECONN_READABLE | ECONN_WRITEABLE) // 0011
-#define ECONN_SHOULD_CLOSE (1 << 2)                 // 0100
+#define ECONN_READABLE (1 << 0)  // 0001
+#define ECONN_WRITEABLE (1 << 1) // 0010
+
+#define ECONN_SHOULD_CLOSE (1 << 2) // 0100
 
 typedef struct {
   int events;
@@ -32,6 +32,8 @@ typedef struct {
   int fd;
   ssize_t off_buf;
   char buf[BUF_SZ];
+  uint n_qe;
+
 } conn_t;
 
 typedef struct {
@@ -99,6 +101,7 @@ static conn_t *server_evq_add_evqe(server_t *s, conn_t *c) {
   if (((s->ev_q_head + 1) & (MAX_EVENTS - 1)) != server_evq_get_tail(s)) {
     s->ev_q[server_evq_get_head(s)] = c;
     server_evq_move_head(s, 1);
+    ++c->n_qe;
     return c;
   }
   return NULL;
@@ -146,12 +149,13 @@ conn_t *server_conn_new(server_t *s, int fd) {
     assert(s->conns[fd].fd == 0);
     assert(s->conns[fd].off_buf == 0);
     assert(s->conns[fd].events == 0);
+    assert(s->conns[fd].n_qe == 0);
 
     ++s->num_cons;
 
     s->conns[fd].fd = fd;
 
-    conn_set_event(&s->conns[fd], ECONN_RW);
+    conn_set_event(&s->conns[fd], ECONN_READABLE | ECONN_WRITEABLE);
     return &s->conns[fd];
   }
 }
@@ -160,6 +164,7 @@ static inline void conn_clear(conn_t *c) {
   c->fd = 0;
   c->events = 0;
   c->off_buf = 0;
+  c->n_qe = 0;
 }
 
 int set_non_blocking(int fd) {
@@ -411,33 +416,42 @@ void server_event_loop_init(server_t *s) {
           conn_t *c = server_conn_new(s, client_fd);
           assert(c != NULL);
           ev.data.fd = client_fd;
-          ev.events = EPOLLIN | EPOLLRDHUP | EPOLLET;
+          ev.events = EPOLLIN | EPOLLET;
           server_must_epoll_ctl(epfd, EPOLL_CTL_ADD, client_fd, &ev);
-          assert(server_evq_add_evqe(s, c) != NULL);
         }
       } else if (cur_ev.events & EPOLLRDHUP || cur_ev.events & EPOLLERR ||
                  cur_ev.events & EPOLLHUP) {
         conn_t *c = &s->conns[cur_ev.data.fd];
+        assert(c->fd == cur_ev.data.fd);
         c->events = 0;
         conn_set_event(c, ECONN_SHOULD_CLOSE);
-        assert(server_evq_add_evqe(s, c));
-      } else if (cur_ev.events & EPOLLIN) {
-        conn_t *c = &s->conns[cur_ev.data.fd];
-        conn_set_event(c, ECONN_READABLE);
-        assert(server_evq_add_evqe(s, c));
-      } else if (cur_ev.events & EPOLLOUT) {
-        conn_t *c = &s->conns[cur_ev.data.fd];
-        conn_set_event(c, ECONN_WRITEABLE);
-        assert(server_evq_add_evqe(s, c));
+        if (!c->n_qe) {
+          assert(server_evq_add_evqe(s, c));
+        }
+      } else {
+        if (cur_ev.events & EPOLLIN) {
+          conn_t *c = &s->conns[cur_ev.data.fd];
+          assert(c->fd == cur_ev.data.fd);
+          conn_set_event(c, ECONN_READABLE);
+          if (!c->n_qe) {
+            assert(server_evq_add_evqe(s, c));
+          }
+        }
+        if (cur_ev.events & EPOLLOUT) {
+          conn_t *c = &s->conns[cur_ev.data.fd];
+          assert(c->fd == cur_ev.data.fd);
+          conn_set_event(c, ECONN_WRITEABLE);
+          if (!c->n_qe) {
+            assert(server_evq_add_evqe(s, c));
+          }
+        }
       }
     }
 
     // proccess ready events
     int to_proccess = server_evq_get_head(s) - server_evq_get_tail(s);
     bool re_add = 0;
-    printf("%d\n", to_proccess);
     while (to_proccess--) {
-      printf("proccessing...\n");
       qe = server_evq_peek_evqe(s);
       assert(qe != NULL);
 
@@ -448,17 +462,21 @@ void server_event_loop_init(server_t *s) {
         assert(close(qe->fd) == 0);
         conn_clear(qe);
 
-      } else if (conn_check_event(qe, ECONN_RW)) {
-        printf("ECONN_RW\n");
-      } else if (conn_check_event(qe, ECONN_READABLE)) {
-        printf("ECONN_READABLE\n");
-      } else if (conn_check_event(qe, ECONN_WRITEABLE)) {
-        printf("ECONN_WRITEABLE\n");
+      } else {
+        if (conn_check_event(qe, ECONN_READABLE)) {
+          printf("ECONN_READABLE\n");
+          
+        }
+        if (conn_check_event(qe, ECONN_WRITEABLE)) {
+          printf("ECONN_WRITEABLE\n");
+        }
       }
 
       if (re_add) {
         server_evq_readd_evqe(s);
       } else {
+        qe->n_qe--;
+        assert(qe->n_qe == 0);
         server_evq_delete_evqe(s);
       }
     }
