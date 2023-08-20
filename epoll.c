@@ -15,7 +15,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#define WITH_ASSERTIONS 0
+#define WITH_ASSERTIONS 1
 
 #define PORT "9919"
 #define BACKLOG 100
@@ -305,7 +305,7 @@ static int conn_recv(conn_t *c) {
   c->off_buf += nr;
 
 #if WITH_ASSERTIONS
-  assert(c->off_buf < BUF_SZ);
+  assert(c->off_buf <= BUF_SZ);
 #endif
 
   if (nr < to_read) {
