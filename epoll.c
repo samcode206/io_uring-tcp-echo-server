@@ -15,7 +15,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#define WITH_ASSERTIONS 1
+#define WITH_ASSERTIONS 0
 
 #define PORT "9919"
 #define BACKLOG 1024
