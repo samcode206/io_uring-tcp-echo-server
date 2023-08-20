@@ -18,7 +18,7 @@
 #define WITH_ASSERTIONS 1
 
 #define PORT "9919"
-#define BACKLOG 100
+#define BACKLOG 1024
 #define BUF_SZ 1024 * 64
 
 #define MAX_EVENTS 1024
@@ -293,6 +293,9 @@ static int conn_recv(conn_t *c) {
     if (!(errno == EAGAIN || errno == EWOULDBLOCK) || nr == 0) {
       c->events = 0;
       conn_set_event(c, ECONN_SHOULD_CLOSE);
+      if (UNLIKELY(errno != ECONNRESET)) {
+        perror("Recv()");
+      }
       // client disconnected or an other error that should cause conn_t to close
       return -1;
     } else {
@@ -344,7 +347,9 @@ static int conn_send(conn_t *c) {
       c->events = 0;
       conn_set_event(c, ECONN_SHOULD_CLOSE);
       // client disconnected or an other error that should cause conn_t to close
-      perror("send()");
+      if (UNLIKELY(errno != ECONNRESET)) {
+        perror("send()");
+      }
       return -1;
     } else {
       // no more to send for now
@@ -465,23 +470,34 @@ void server_event_loop_init(server_t *s) {
     for (int i = 0; i < n_evs; ++i) {
       struct epoll_event cur_ev = s->ep_evs[i];
       if (cur_ev.data.fd == server_fd) {
-        int client_fd = accept4(server_fd, (struct sockaddr *)&client_addr,
-                                &addr_size, O_NONBLOCK);
-        if (client_fd < 0) {
-          if (!(errno == EAGAIN || errno == EWOULDBLOCK)) {
-            perror("accept()");
-          }
-        } else {
-          conn_t *c = server_conn_new(s, client_fd);
-          if (UNLIKELY(c == NULL)) {
-            printf("can't accept new connections: server_conn_new\n");
-            exit(1);
-          }
+        // TODO(sah): make sure to limit to number of conns that we can accept
+        while (1) {
+          int client_fd = accept4(server_fd, (struct sockaddr *)&client_addr,
+                                  &addr_size, O_NONBLOCK);
 
-          ev.data.fd = client_fd;
-          ev.events = EPOLLIN | EPOLLET;
-          server_must_epoll_ctl(epfd, EPOLL_CTL_ADD, client_fd, &ev);
+          if (client_fd < 0) {
+            if (!(errno == EAGAIN)) {
+              perror("accept4()");
+            } else {
+              break;
+            }
+          } else {
+            if (UNLIKELY(client_fd > MAX_CONNS - 4)) {
+              printf("accept4(): cannot index fd: %d", client_fd);
+              exit(1);
+            }
+            conn_t *c = server_conn_new(s, client_fd);
+            if (UNLIKELY(c == NULL)) {
+              printf("can't accept new connections: server_conn_new\n");
+              exit(1);
+            }
+
+            ev.data.fd = client_fd;
+            ev.events = EPOLLIN | EPOLLET;
+            server_must_epoll_ctl(epfd, EPOLL_CTL_ADD, client_fd, &ev);
+          }
         }
+
       } else if (cur_ev.events & EPOLLRDHUP || cur_ev.events & EPOLLERR ||
                  cur_ev.events & EPOLLHUP) {
         conn_t *c = &s->conns[cur_ev.data.fd];
