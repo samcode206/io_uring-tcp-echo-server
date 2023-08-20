@@ -107,22 +107,6 @@ static conn_t *server_evq_add_evqe(server_t *s, conn_t *c) {
   return NULL;
 }
 
-static int server_evq_delete_orphan_evqe(server_t *s) {
-  if (server_evq_get_space(s) < MAX_EVENTS - 1) {
-    size_t tail = server_evq_get_tail(s);
-    assert(s->ev_q[tail] != NULL);
-    assert(s->ev_q[tail]->n_qe == 0);
-    assert(s->ev_q[tail]->fd == 0);
-    assert(s->ev_q[tail]->off_buf == 0);
-    s->ev_q[tail]->n_qe = 0;
-    s->ev_q[tail] = NULL;
-    server_evq_move_tail(s, 1);
-    return 1;
-  }
-
-  return -1;
-}
-
 static int server_evq_delete_evqe(server_t *s) {
   printf("t: %zu h: %zu\n", s->ev_q_tail, s->ev_q_head);
   if ((server_evq_get_tail(s) == server_evq_get_head(s))) {
@@ -499,10 +483,14 @@ void server_event_loop_init(server_t *s) {
       printf("t %zu h %zu \n", s->ev_q_tail, s->ev_q_head);
 
       if (qe->fd == 0) {
-        assert(qe->fd == 0);
-        assert(qe->n_qe == 0);
-        assert(qe->off_buf == 0);
-        assert(server_evq_delete_orphan_evqe(s) != -1);
+        size_t tail = server_evq_get_tail(s);
+        assert(s->ev_q[tail] != NULL);
+        assert(s->ev_q[tail]->n_qe == 0);
+        assert(s->ev_q[tail]->fd == 0);
+        assert(s->ev_q[tail]->off_buf == 0);
+        s->ev_q[tail]->n_qe = 0;
+        s->ev_q[tail] = NULL;
+        server_evq_move_tail(s, 1);
       } else {
         if (conn_check_event(qe, ECONN_SHOULD_CLOSE)) {
           printf("ECONN_SHOULD_CLOSE\n");
