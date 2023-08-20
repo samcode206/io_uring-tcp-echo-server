@@ -177,10 +177,7 @@ conn_t *server_conn_new(server_t *s, int fd) {
 }
 
 static inline void server_conn_clear(server_t *s, conn_t *c) {
-  c->fd = 0;
-  c->events = 0;
-  c->off_buf = 0;
-  c->n_qe = 0;
+  memset(c, 0, offsetof(conn_t, buf));
   --s->num_cons;
 }
 
