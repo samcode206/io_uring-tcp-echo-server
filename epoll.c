@@ -572,8 +572,10 @@ void server_event_loop_init(server_t *s) {
           server_conn_clear(s, qe);
 
         } else {
-          if (conn_check_event(qe, ECONN_READABLE | ECONN_WRITEABLE)) {
-            int ret = server_conn_read_write_limited(s, qe, 4);
+          if (conn_check_event(qe, ECONN_WRITEABLE) &&
+              conn_check_event(qe, ECONN_READABLE)) {
+
+            int ret = server_conn_read_write_limited(s, qe, 25);
             if (ret <= 0) {
               if (ret == -1) {
                 server_must_conn_close(s, qe, &ev);
@@ -582,6 +584,7 @@ void server_event_loop_init(server_t *s) {
 
               } else {
                 if (!conn_check_event(qe, ECONN_WRITEABLE) && qe->off_buf) {
+                  conn_unset_event(qe, ECONN_READABLE);
                   ev.data.fd = qe->fd;
                   ev.events = EPOLLOUT | EPOLLET;
                   server_must_epoll_ctl(epfd, EPOLL_CTL_MOD, qe->fd, &ev);
@@ -615,7 +618,6 @@ void server_event_loop_init(server_t *s) {
 
               server_evq_delete_evqe(s);
             }
-            printf("ECONN_WRITEABLE\n");
           } else if ((conn_check_event(qe, ECONN_READABLE))) {
             exit(1);
             printf("ECONN_READABLE\n");
