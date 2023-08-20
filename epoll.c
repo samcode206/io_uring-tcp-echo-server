@@ -483,7 +483,7 @@ void server_event_loop_init(server_t *s) {
             }
           } else {
             if (UNLIKELY(client_fd > MAX_CONNS - 4)) {
-              printf("accept4(): cannot index fd: %d", client_fd);
+              printf("accept4(): cannot index fd: %d\n", client_fd);
               exit(1);
             }
             conn_t *c = server_conn_new(s, client_fd);
