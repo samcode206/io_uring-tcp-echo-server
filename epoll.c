@@ -182,7 +182,7 @@ bool conn_check_event(conn_t *c, int ev_mask) {
 }
 
 conn_t *server_conn_new(server_t *s, int fd) {
-  if (UNLIKELY(s->num_cons + 1 > MAX_CONNS)) {
+  if (UNLIKELY(s->num_cons + 1 >= MAX_CONNS)) {
     return NULL;
   } else {
 
