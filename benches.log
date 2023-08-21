@@ -1,5 +1,19 @@
 TODO: organize this and document how data is collected
 
+    Request-Response Mode (req-res):
+        Behavior: In this mode, the client sends a request (a buffer of random data) to the server and then waits for a response. 
+        The client does not send another request until the response for the previous request has been received. 
+        This mode represents a synchronous or blocking style of communication.
+        The behavior of this mode is somewhat reminiscent of common HTTP/1.1 usage where each request-response pair
+        is handled sequentially over a connection.
+    
+
+    Streaming Mode (stream):
+        Behavior: In this mode, the client simultaneously sends requests and reads responses without waiting for a one-to-one correspondence between requests and responses.
+         It uses two separate routines: one for continuously writing data to the server and another for continuously reading data from the server.
+         This mode represents an asynchronous or non-blocking style of communication.
+         This mode's behavior is analogous to how HTTP/2 can multiplex multiple requests and responses over a single connection,
+
 io_uring / 1024 payload / 1000 connections / stream mode
 
 sent/second: 3.8 GB
