@@ -625,7 +625,7 @@ void server_event_loop_init(server_t *s) {
   }
 }
 
-void sig_int_handler(int sig){ // can be called asynchronously
+void sig_int_handler(int sig){ 
   exit(0);
 }
 
