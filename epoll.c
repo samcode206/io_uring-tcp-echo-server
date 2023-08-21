@@ -43,7 +43,7 @@ SOFTWARE.
 
 #define PORT "9919"
 #define BACKLOG 1024
-#define BUF_SZ 1024 * 64
+#define BUF_SZ 1024 * 128
 
 #define MAX_EVENTS 1024
 #define MAX_CONNS 1024
@@ -59,7 +59,7 @@ SOFTWARE.
 typedef struct {
   int events;
   int fd;
-  uint n_qe;
+  int n_qe;
   ssize_t off_buf;
   char buf[BUF_SZ];
 } conn_t;
@@ -135,7 +135,6 @@ static conn_t *server_evq_add_evqe(server_t *s, conn_t *c) {
     s->ev_q[server_evq_get_head(s)] = c;
     server_evq_move_head(s, 1);
     ++c->n_qe;
-
 #if WITH_ASSERTIONS
     assert(c->n_qe == 1);
 #endif
@@ -195,7 +194,8 @@ conn_t *server_conn_new(server_t *s, int fd) {
 
     ++s->num_cons;
     s->conns[fd].fd = fd;
-    conn_set_event(&s->conns[fd], ECONN_READABLE | ECONN_WRITEABLE);
+    conn_set_event(&s->conns[fd], ECONN_READABLE);
+    conn_set_event(&s->conns[fd], ECONN_WRITEABLE);
     return &s->conns[fd];
   }
 }
@@ -280,119 +280,6 @@ static inline bool conn_should_write(conn_t *c) {
   return conn_check_event(c, ECONN_WRITEABLE) && c->off_buf > 0;
 }
 
-/*
-  conn_recv reads data from c->fd storing it in c->buf it modifies c->events
-  accordingly.
-  if the entire space of c->buf is filled and no error is encountered 1 is
-  returned if an error is encountered while reading that is not related to being
-  blocking due to an empty receive buffer -1 is returned and ECONN_SHOULD_CLOSE
-  is set in c->events if the receive buffer is drained and c->buf couldn't be
-  filled 0 is returned and ECONN_READABLE is unset
-  note*:
-  Caller MUST ensure that c->fd is valid & c->buf has space to write into if no
-  space is available in c->buf 0 is returned but ECONN_READABLE will remain set
-  in c->events
- */
-static int conn_recv(conn_t *c) {
-#if WITH_ASSERTIONS
-  assert(conn_check_event(c, ECONN_READABLE));
-  assert(c->fd != 0);
-#endif
-
-  int to_read = BUF_SZ - c->off_buf;
-
-#if WITH_ASSERTIONS
-  assert(to_read >= 0);
-#endif
-
-  if (to_read == 0) {
-    return 0; // buffer is full reading is not possible
-  }
-
-  int nr = recv(c->fd, c->buf + c->off_buf, to_read, 0);
-  if (nr <= 0) {
-    if (!(errno == EAGAIN || errno == EWOULDBLOCK) || nr == 0) {
-      c->events = 0;
-      conn_set_event(c, ECONN_SHOULD_CLOSE);
-      if (UNLIKELY(errno != ECONNRESET)) {
-        perror("Recv()");
-      }
-      // client disconnected or an other error that should cause conn_t to close
-      return -1;
-    } else {
-      // no more to read for now
-      conn_unset_event(c, ECONN_READABLE);
-      return 0;
-    }
-  }
-
-  c->off_buf += nr;
-
-#if WITH_ASSERTIONS
-  assert(c->off_buf <= BUF_SZ);
-#endif
-
-  if (nr < to_read) {
-    conn_unset_event(c, ECONN_READABLE);
-    return 0; // there's no more to read
-  } else {
-    return 1; // there's potentially more to read
-  }
-}
-
-/*
-  conn_send writes data to c->fd from c->buf it modifies c->events accordingly
-  if the full payload in c->buf is written and no error is encountered 1 is
-  returned if some of the payload is written but draining c->buf wasn't possible
-  0 is returned and ECONN_WRITEABLE is unset from c->events
-  if an error is encountered other than EAGAIN -1 is returned and
-  ECONN_SHOULD_CLOSE is set in c->events
-  note*:
-  Caller MUST ensure that c->fd is valid & c->buf has something to be written
-  if nothing is to be written 0 is returned and no modifications occur to
-  provided conn_t
- */
-static int conn_send(conn_t *c) {
-#if WITH_ASSERTIONS
-  assert(conn_check_event(c, ECONN_WRITEABLE));
-  assert(c->fd != 0);
-#endif
-
-  if (c->off_buf == 0) {
-    return 0; // nothing to write
-  }
-
-  int nw = send(c->fd, c->buf, c->off_buf, 0);
-  if (nw <= 0) {
-    if (!(errno == EAGAIN || errno == EWOULDBLOCK) || nw == 0) {
-      c->events = 0;
-      conn_set_event(c, ECONN_SHOULD_CLOSE);
-      // client disconnected or an other error that should cause conn_t to close
-      if (UNLIKELY(errno != ECONNRESET)) {
-        perror("send()");
-      }
-      return -1;
-    } else {
-      // no more to send for now
-      conn_unset_event(c, ECONN_WRITEABLE);
-      return 0;
-    }
-  }
-
-  c->off_buf -= nw;
-
-#if WITH_ASSERTIONS
-  assert(c->off_buf < BUF_SZ);
-#endif
-
-  if (c->off_buf) {
-    conn_unset_event(c, ECONN_WRITEABLE);
-    return 0; // we can't write more for now
-  } else {
-    return 1;
-  }
-}
-
 static void server_must_conn_close(server_t *s, conn_t *c,
                                    struct epoll_event *ev) {
 #if WITH_ASSERTIONS
@@ -406,45 +293,6 @@ static void server_must_conn_close(server_t *s, conn_t *c,
     perror("close()");
     exit(1);
   }
-}
-
-static int server_conn_read_write_limited(server_t *s, conn_t *c,
-                                          uint n_loops) {
-  uint i = 0;
-
-  bool readable = conn_should_read(c);
-  bool writeable = conn_should_write(c);
-
-  while ((readable || writeable) && i++ < n_loops) {
-
-    if (writeable) {
-      int ret = conn_send(c);
-      if (ret == -1) {
-        return -1;
-      } else if (ret == 0) {
-        return 0;
-      } else {
-        readable = conn_should_read(c);
-      };
-    }
-
-    if (readable) {
-      int ret = conn_recv(c);
-      if (ret == -1) {
-        return -1;
-      } else if (ret == 0) {
-        writeable = conn_should_write(c);
-        if (!writeable) {
-          return 0;
-        }
-      }
-    }
-  }
-
-  readable = conn_should_read(c);
-  writeable = conn_should_write(c);
-
-  return 0;
 }
 
 void server_event_loop_init(server_t *s) {
@@ -535,12 +383,12 @@ void server_event_loop_init(server_t *s) {
           };
         }
       } else {
-        if (cur_ev.events & EPOLLIN) {
+        if (cur_ev.events & EPOLLOUT) {
           conn_t *c = &s->conns[cur_ev.data.fd];
 #if WITH_ASSERTIONS
           assert(c->fd == cur_ev.data.fd);
 #endif
-          conn_set_event(c, ECONN_READABLE);
+          conn_set_event(c, ECONN_WRITEABLE);
           if (!c->n_qe) {
             if (UNLIKELY(server_evq_add_evqe(s, c) == NULL)) {
               printf("server_evq_add_evqe: evq is full\n");
@@ -548,12 +396,12 @@ void server_event_loop_init(server_t *s) {
             };
           }
         }
-        if (cur_ev.events & EPOLLOUT) {
+        if (cur_ev.events & EPOLLIN) {
           conn_t *c = &s->conns[cur_ev.data.fd];
 #if WITH_ASSERTIONS
           assert(c->fd == cur_ev.data.fd);
 #endif
-          conn_set_event(c, ECONN_WRITEABLE);
+          conn_set_event(c, ECONN_READABLE);
           if (!c->n_qe) {
             if (UNLIKELY(server_evq_add_evqe(s, c) == NULL)) {
               printf("server_evq_add_evqe: evq is full\n");
@@ -573,6 +421,7 @@ void server_event_loop_init(server_t *s) {
       assert(qe != NULL);
 #endif
 
+      // connection was closed and cleared
       if (qe->fd == 0) {
         size_t tail = server_evq_get_tail(s);
 #if WITH_ASSERTIONS
@@ -593,55 +442,85 @@ void server_event_loop_init(server_t *s) {
           server_conn_clear(s, qe);
 
         } else {
-          if (conn_check_event(qe, ECONN_WRITEABLE) &&
-              conn_check_event(qe, ECONN_READABLE)) {
+          if (!conn_check_event(qe, ECONN_READABLE)) {
+            ev.data.fd = qe->fd;
+            ev.events = EPOLLIN | EPOLLET;
+            server_must_epoll_ctl(epfd, EPOLL_CTL_MOD, ev.data.fd, &ev);
+          }
+          bool readable =
+              conn_check_event(qe, ECONN_READABLE) && BUF_SZ - qe->off_buf > 0;
+          bool writeable =
+              conn_check_event(qe, ECONN_WRITEABLE) && qe->off_buf > 0;
 
-            int ret = server_conn_read_write_limited(s, qe, 25);
-            if (ret <= 0) {
-              if (ret == -1) {
-                server_must_conn_close(s, qe, &ev);
-                server_evq_delete_evqe(s);
-                server_conn_clear(s, qe);
+          int i = 0;
+          ssize_t send_ret = -1;
+          ssize_t recv_ret = -1;
 
-              } else {
-                if (!conn_check_event(qe, ECONN_WRITEABLE) && qe->off_buf) {
-                  conn_unset_event(qe, ECONN_READABLE);
-                  ev.data.fd = qe->fd;
-                  ev.events = EPOLLOUT | EPOLLET;
-                  server_must_epoll_ctl(epfd, EPOLL_CTL_MOD, qe->fd, &ev);
-                }
-#if WITH_ASSERTIONS
-                assert(qe->fd != 0);
-#endif
-
-                server_evq_delete_evqe(s);
-              }
-            } else {
-              // success
+#define MAX_LOOPS 16
+          while (1) {
+            if (!readable && !writeable) {
+              server_evq_delete_evqe(s);
+              break;
+            } else if (i++ == MAX_LOOPS) {
               server_evq_readd_evqe(s);
+              break;
             }
-          } else if (conn_check_event(qe, ECONN_WRITEABLE)) {
-            int ret = conn_send(qe);
-            if (ret == -1) {
-              server_must_conn_close(s, qe, &ev);
-              server_evq_delete_evqe(s);
-              server_conn_clear(s, qe);
-            } else {
-#if WITH_ASSERTIONS
-              assert(qe->fd != 0);
-#endif
-              ev.data.fd = qe->fd;
-              ev.events = EPOLLIN | EPOLLET;
-              server_must_epoll_ctl(epfd, EPOLL_CTL_MOD, qe->fd, &ev);
-#if WITH_ASSERTIONS
-              assert(qe->n_qe == 1);
-#endif
 
-              server_evq_delete_evqe(s);
+            if (writeable) {
+              send_ret = send(qe->fd, qe->buf, qe->off_buf, 0);
+
+              if (send_ret > 0) {
+
+                qe->off_buf -= send_ret;
+              } else {
+                conn_unset_event(qe, ECONN_WRITEABLE);
+                conn_unset_event(qe, ECONN_READABLE);
+                if (send_ret == -1 &&
+                    (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                  // stop reading more data and rearm EPOLLOUT
+
+                  ev.data.fd = qe->fd;
+                  ev.events = EPOLLOUT | EPOLLET | EPOLLONESHOT;
+                  server_must_epoll_ctl(epfd, EPOLL_CTL_MOD, ev.data.fd, &ev);
+                  server_evq_delete_evqe(s);
+                } else {
+                  // close & clean up
+                  server_must_conn_close(s, qe, &ev);
+                  server_evq_delete_evqe(s);
+                  server_conn_clear(s, qe);
+                }
+                break; // breakout of loop regardless of error
+              }
             }
-          } else if ((conn_check_event(qe, ECONN_READABLE))) {
-            exit(1);
-            printf("ECONN_READABLE\n");
+
+            readable = conn_check_event(qe, ECONN_READABLE) &&
+                       BUF_SZ - qe->off_buf > 0;
+
+            if (readable) {
+              recv_ret =
+                  recv(qe->fd, qe->buf + qe->off_buf, BUF_SZ - qe->off_buf, 0);
+
+              if (recv_ret > 0) {
+                qe->off_buf += recv_ret;
+              } else {
+                conn_unset_event(qe, ECONN_READABLE);
+
+                if (recv_ret == -1 &&
+                    (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                  // perror("is_tmp_io_err::recv()");
+                  server_evq_delete_evqe(s);
+                } else {
+                  // close & clean up
+                  server_must_conn_close(s, qe, &ev);
+                  server_evq_delete_evqe(s);
+                  server_conn_clear(s, qe);
+                }
+                break; // // breakout of loop regardless of error
+              }
+            }
+
+            writeable =
+                conn_check_event(qe, ECONN_WRITEABLE) && qe->off_buf > 0;
           }
         }
       }
