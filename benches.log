@@ -1,0 +1,134 @@
+
+io_uring / 1024 payload / 1000 connections / stream mode
+
+sent/second: 3.8 GB
+received/second: 2.3 GB
+requests/second: 3687847
+responses/second: 2222675
+
+total-bytes-sent: 37.8 GB 
+total-bytes-received:22.8 GB 
+total-requests-sent: 36878475 
+total-responses-received: 22226753
+
+
+epoll / 1024 payload / 1000 connections / stream mode
+
+sent/second: 4.1 GB
+received/second: 3.1 GB
+requests/second: 4023032
+responses/second: 3062938
+
+total-bytes-sent: 41.2 GB 
+total-bytes-received:31.4 GB 
+total-requests-sent: 40230324 
+total-responses-received: 30629380
+
+
+
+io_uring / 32kb payload / 1000 connections / stream mode
+sent/second: 4.3 GB
+received/second: 2.8 GB
+requests/second: 131630
+responses/second: 85505
+
+total-bytes-sent: 43.1 GB 
+total-bytes-received:28.0 GB 
+total-requests-sent: 1316307 
+total-responses-received: 855053
+
+
+epoll / 32kb payload / 1000 connections / stream mode
+
+sent/second: 5.2 GB
+received/second: 4.2 GB
+requests/second: 158505
+responses/second: 128502
+
+total-bytes-sent: 51.9 GB 
+total-bytes-received:42.0 GB 
+total-requests-sent: 1585057 
+total-responses-received: 1285023
+
+
+io_uring / 64kb payload / 1000 connections / req-res mode
+
+sent/second: 3.3 GB
+received/second: 3.2 GB
+requests/second: 49923
+responses/second: 49824
+
+total-bytes-sent: 32.7 GB 
+total-bytes-received:32.4 GB 
+total-requests-sent: 499239 
+total-responses-received: 498241
+
+
+epoll / 64kb payload / 1000 connections / req-res mode
+
+sent/second: 5.3 GB
+received/second: 5.1 GB
+requests/second: 81358
+responses/second: 81258
+
+total-bytes-sent: 53.3 GB 
+total-bytes-received:51.0 GB 
+total-requests-sent: 813581 
+total-responses-received: 812581
+
+
+
+io_uring / 64kb payload / 1000 connections / stream mode
+
+sent/second: 4.3 GB
+received/second: 2.9 GB
+requests/second: 66206
+responses/second: 55269
+
+total-bytes-sent: 43.4 GB 
+total-bytes-received:29.0 GB 
+total-requests-sent: 662060 
+total-responses-received: 552696
+
+
+
+epoll / 64kb payload / 1000 connections / stream mode
+
+sent/second: 5.2 GB
+received/second: 4.2 GB
+requests/second: 79361
+responses/second: 72374
+
+total-bytes-sent: 52.0 GB 
+total-bytes-received:42.1 GB 
+total-requests-sent: 793616 
+total-responses-received: 723747
+
+
+
+
+io_uring / 64kb payload / 1 connection / stream mode
+
+sent/second: 3.6 GB
+received/second: 3.6 GB
+requests/second: 55362
+responses/second: 71777
+
+total-bytes-sent: 36.3 GB 
+total-bytes-received:36.3 GB 
+total-requests-sent: 553627 
+total-responses-received: 717779
+
+
+
+epoll / 64kb payload / 1 connection / stream mode
+
+sent/second: 5.7 GB
+received/second: 5.7 GB
+requests/second: 87001
+responses/second: 90215
+
+total-bytes-sent: 57.0 GB 
+total-bytes-received:57.0 GB 
+total-requests-sent: 870012 
+total-responses-received: 902155
