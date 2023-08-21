@@ -625,10 +625,15 @@ void server_event_loop_init(server_t *s) {
   }
 }
 
+void sig_int_handler(int sig){ // can be called asynchronously
+  exit(0);
+}
+
 int main(void) {
   static_assert((MAX_EVENTS & (MAX_EVENTS - 1)) == 0,
                 "MAX_EVENTS must be a power of 2");
   signal(SIGPIPE, SIG_IGN);
+  signal(SIGINT, sig_int_handler);
   int fd = server_nb_socket_bind_listen();
 
   server_t *s = server_new();
