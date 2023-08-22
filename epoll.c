@@ -471,11 +471,13 @@ void server_event_loop_init(server_t *s) {
 
               if (send_ret > 0) {
                 qe->off_buf -= send_ret;
-              } else {
+              }
+
+              if (send_ret <= 0 || qe->off_buf) {
                 conn_unset_event(qe, ECONN_WRITEABLE);
                 conn_unset_event(qe, ECONN_READABLE);
-                if (send_ret == -1 &&
-                    (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                if (qe->off_buf || (send_ret == -1 && (errno == EAGAIN ||
+                                                       errno == EWOULDBLOCK))) {
                   // stop reading more data and rearm EPOLLOUT
 
                   ev.data.fd = qe->fd;
