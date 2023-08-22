@@ -364,18 +364,16 @@ void server_event_loop_init(server_t *s) {
             }
 
             ev.data.fd = client_fd;
-            ev.events = EPOLLIN | EPOLLET;
+            ev.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
             server_must_epoll_ctl(epfd, EPOLL_CTL_ADD, client_fd, &ev);
           }
         }
 
-      } else if (cur_ev.events & EPOLLRDHUP || cur_ev.events & EPOLLERR ||
-                 cur_ev.events & EPOLLHUP) {
+      } else if (cur_ev.events & (EPOLLHUP | EPOLLERR | EPOLLRDHUP)) {
         conn_t *c = &s->conns[cur_ev.data.fd];
 #if WITH_ASSERTIONS
         assert(c->fd == cur_ev.data.fd);
 #endif
-
         c->events = 0;
         conn_set_event(c, ECONN_SHOULD_CLOSE);
         if (!c->n_qe) {
@@ -446,7 +444,7 @@ void server_event_loop_init(server_t *s) {
         } else {
           if (!conn_check_event(qe, ECONN_READABLE)) {
             ev.data.fd = qe->fd;
-            ev.events = EPOLLIN | EPOLLET;
+            ev.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
             server_must_epoll_ctl(epfd, EPOLL_CTL_MOD, ev.data.fd, &ev);
           }
           int readable =
@@ -476,7 +474,7 @@ void server_event_loop_init(server_t *s) {
                   // stop reading more data and rearm EPOLLOUT
 
                   ev.data.fd = qe->fd;
-                  ev.events = EPOLLOUT | EPOLLET;
+                  ev.events = EPOLLOUT | EPOLLET | EPOLLRDHUP;
                   server_must_epoll_ctl(epfd, EPOLL_CTL_MOD, ev.data.fd, &ev);
                   server_evq_delete_evqe(s);
                 } else {
