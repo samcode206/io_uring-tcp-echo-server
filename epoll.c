@@ -470,7 +470,6 @@ void server_event_loop_init(server_t *s) {
               send_ret = send(qe->fd, qe->buf, qe->off_buf, 0);
 
               if (send_ret > 0) {
-
                 qe->off_buf -= send_ret;
               } else {
                 conn_unset_event(qe, ECONN_WRITEABLE);
@@ -480,7 +479,7 @@ void server_event_loop_init(server_t *s) {
                   // stop reading more data and rearm EPOLLOUT
 
                   ev.data.fd = qe->fd;
-                  ev.events = EPOLLOUT | EPOLLET | EPOLLONESHOT;
+                  ev.events = EPOLLOUT | EPOLLET;
                   server_must_epoll_ctl(epfd, EPOLL_CTL_MOD, ev.data.fd, &ev);
                   server_evq_delete_evqe(s);
                 } else {
