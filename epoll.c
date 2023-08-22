@@ -176,7 +176,7 @@ void conn_set_event(conn_t *c, int ev_mask) { c->events |= ev_mask; }
 
 void conn_unset_event(conn_t *c, int ev_mask) { c->events &= ~ev_mask; }
 
-bool conn_check_event(conn_t *c, int ev_mask) {
+int conn_check_event(conn_t *c, int ev_mask) {
   return (c->events & ev_mask) != 0;
 }
 
@@ -315,6 +315,8 @@ void server_event_loop_init(server_t *s) {
 
   int timeout;
   conn_t *qe;
+  int p_idx = 0;
+  ssize_t io_ret = -1;
 
   for (;;) {
 
@@ -447,37 +449,30 @@ void server_event_loop_init(server_t *s) {
             ev.events = EPOLLIN | EPOLLET;
             server_must_epoll_ctl(epfd, EPOLL_CTL_MOD, ev.data.fd, &ev);
           }
-          bool readable =
+          int readable =
               conn_check_event(qe, ECONN_READABLE) && BUF_SZ - qe->off_buf > 0;
-          bool writeable =
+          int writeable =
               conn_check_event(qe, ECONN_WRITEABLE) && qe->off_buf > 0;
-
-          int i = 0;
-          ssize_t send_ret = -1;
-          ssize_t recv_ret = -1;
 
 #define MAX_LOOPS 16
           while (1) {
             if (!readable && !writeable) {
               server_evq_delete_evqe(s);
               break;
-            } else if (i++ == MAX_LOOPS) {
+            } else if (p_idx++ == MAX_LOOPS) {
               server_evq_readd_evqe(s);
               break;
             }
 
             if (writeable) {
-              send_ret = send(qe->fd, qe->buf, qe->off_buf, 0);
+              io_ret = send(qe->fd, qe->buf, qe->off_buf, 0);
 
-              if (send_ret > 0) {
-                qe->off_buf -= send_ret;
-              }
+              qe->off_buf -= (io_ret > 0) * io_ret;
 
-              if (send_ret <= 0 || qe->off_buf) {
+              if (io_ret <= 0 || qe->off_buf) {
                 conn_unset_event(qe, ECONN_WRITEABLE);
                 conn_unset_event(qe, ECONN_READABLE);
-                if (qe->off_buf || (send_ret == -1 && (errno == EAGAIN ||
-                                                       errno == EWOULDBLOCK))) {
+                if (qe->off_buf || (errno == EAGAIN || errno == EWOULDBLOCK)) {
                   // stop reading more data and rearm EPOLLOUT
 
                   ev.data.fd = qe->fd;
@@ -498,16 +493,13 @@ void server_event_loop_init(server_t *s) {
                        BUF_SZ - qe->off_buf > 0;
 
             if (readable) {
-              recv_ret =
+              io_ret =
                   recv(qe->fd, qe->buf + qe->off_buf, BUF_SZ - qe->off_buf, 0);
 
-              if (recv_ret > 0) {
-                qe->off_buf += recv_ret;
-              } else {
+              qe->off_buf += (io_ret > 0) * io_ret;
+              if (io_ret <= 0) {
                 conn_unset_event(qe, ECONN_READABLE);
-
-                if (recv_ret == -1 &&
-                    (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                if ((errno == EAGAIN || errno == EWOULDBLOCK)) {
                   // perror("is_tmp_io_err::recv()");
                   server_evq_delete_evqe(s);
                 } else {
@@ -529,7 +521,7 @@ void server_event_loop_init(server_t *s) {
   }
 }
 
-void sig_int_handler(int sig) { exit(0); }
+void sig_int_handler(int sig) { _exit(0); }
 
 int main(void) {
   static_assert((MAX_EVENTS & (MAX_EVENTS - 1)) == 0,
