@@ -452,7 +452,7 @@ void server_event_loop_init(server_t *s) {
           int writeable =
               conn_check_event(qe, ECONN_WRITEABLE) && qe->off_buf > 0;
 
-#define MAX_LOOPS 512
+#define MAX_LOOPS 8
           while (1) {
             if (!readable && !writeable) {
               server_evq_delete_evqe(s);
