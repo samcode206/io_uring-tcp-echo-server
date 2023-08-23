@@ -35,6 +35,7 @@ SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -78,7 +79,9 @@ typedef struct {
 } server_t;
 
 server_t *server_new() {
-  server_t *s = calloc(1, sizeof(server_t));
+  server_t *s = mmap(NULL, sizeof(server_t), PROT_READ | PROT_WRITE,
+                     MAP_ANON | MAP_PRIVATE | MAP_POPULATE, -1, 0);
+  assert(s != MAP_FAILED);
   return s;
 }
 
