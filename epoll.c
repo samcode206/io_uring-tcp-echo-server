@@ -40,7 +40,7 @@ SOFTWARE.
 #include <sys/types.h>
 #include <unistd.h>
 
-#define WITH_ASSERTIONS 0
+#define DIAGNOSTIC 0
 
 #define PORT "9919"
 #define BACKLOG 1024
@@ -138,7 +138,7 @@ static conn_t *server_evq_add_evqe(server_t *s, conn_t *c) {
     s->ev_q[server_evq_get_head(s)] = c;
     server_evq_move_head(s, 1);
     ++c->n_qe;
-#if WITH_ASSERTIONS
+#if DIAGNOSTIC
     assert(c->n_qe == 1);
 #endif
 
@@ -151,7 +151,7 @@ static conn_t *server_evq_add_evqe(server_t *s, conn_t *c) {
 static void server_evq_delete_evqe(server_t *s) {
   size_t tail = server_evq_get_tail(s);
 
-#if WITH_ASSERTIONS
+#if DIAGNOSTIC
   assert(s->ev_q[tail] != NULL);
   assert(s->ev_q[tail]->n_qe == 1);
 #endif
@@ -188,7 +188,7 @@ conn_t *server_conn_new(server_t *s, int fd) {
     return NULL;
   } else {
 
-#if WITH_ASSERTIONS
+#if DIAGNOSTIC
     assert(s->conns[fd].fd == 0);
     assert(s->conns[fd].off_buf == 0);
     assert(s->conns[fd].events == 0);
@@ -285,7 +285,7 @@ static inline bool conn_should_write(conn_t *c) {
 
 static void server_must_conn_close(server_t *s, conn_t *c,
                                    struct epoll_event *ev) {
-#if WITH_ASSERTIONS
+#if DIAGNOSTIC
   assert(c->fd != 0);
 #endif
 
@@ -374,7 +374,7 @@ void server_event_loop_init(server_t *s) {
 
       } else if (cur_ev.events & (EPOLLHUP | EPOLLERR | EPOLLRDHUP)) {
         conn_t *c = &s->conns[cur_ev.data.fd];
-#if WITH_ASSERTIONS
+#if DIAGNOSTIC
         assert(c->fd == cur_ev.data.fd);
 #endif
         c->events = 0;
@@ -388,7 +388,7 @@ void server_event_loop_init(server_t *s) {
       } else {
         if (cur_ev.events & EPOLLOUT) {
           conn_t *c = &s->conns[cur_ev.data.fd];
-#if WITH_ASSERTIONS
+#if DIAGNOSTIC
           assert(c->fd == cur_ev.data.fd);
 #endif
           conn_set_event(c, ECONN_WRITEABLE);
@@ -401,7 +401,7 @@ void server_event_loop_init(server_t *s) {
         }
         if (cur_ev.events & EPOLLIN) {
           conn_t *c = &s->conns[cur_ev.data.fd];
-#if WITH_ASSERTIONS
+#if DIAGNOSTIC
           assert(c->fd == cur_ev.data.fd);
 #endif
           conn_set_event(c, ECONN_READABLE);
@@ -420,14 +420,14 @@ void server_event_loop_init(server_t *s) {
     // printf("to proccess: %d\n", to_proccess);
     while (to_proccess--) {
       qe = server_evq_peek_evqe(s);
-#if WITH_ASSERTIONS
+#if DIAGNOSTIC
       assert(qe != NULL);
 #endif
 
       // connection was closed and cleared
       if (qe->fd == 0) {
         size_t tail = server_evq_get_tail(s);
-#if WITH_ASSERTIONS
+#if DIAGNOSTIC
         assert(s->ev_q[tail] != NULL);
         assert(s->ev_q[tail]->n_qe == 0);
         assert(s->ev_q[tail]->fd == 0);
