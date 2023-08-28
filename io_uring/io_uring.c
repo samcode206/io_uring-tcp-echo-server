@@ -34,15 +34,19 @@ SOFTWARE.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <sys/mman.h>
 
 #define FD_COUNT 1024
 #define SQ_DEPTH 1024
-#define BUFFER_SIZE 1024 * 128
-#define BUF_RINGS 2  // must be power of 2
-#define BG_ENTRIES 512 // must be power of 2
+
+#define BUF_SHIFT 17
+#define BUFFER_SIZE (1U << BUF_SHIFT) /* 131kb */
+#define BUF_RINGS 2                   // must be power of 2
+#define BG_ENTRIES 1024                  // must be power of 2
+#define BUF_bASE_OFFSET (sizeof(struct io_uring_buf) * BG_ENTRIES)
+
 #define CONN_BACKLOG 1024
 
 #define FD_MASK ((1ULL << 21) - 1) // 21 bits
@@ -74,9 +78,8 @@ static inline void set_event(uint64_t *data, uint8_t event) {
   *data = (*data & ~EVENT_MASK) | ((uint64_t)event << EVENT_SHIFT);
 }
 
-static inline uint32_t get_fd(uint64_t data) {
-  return (data & FD_MASK);
-}
+static inline uint32_t get_fd(uint64_t data) { return (data & FD_MASK); }
+
 static inline uint32_t get_bgid(uint64_t data) {
   return (data & BGID_MASK) >> BGID_SHIFT;
 }
@@ -89,7 +92,6 @@ typedef struct {
   struct io_uring_buf_ring *buf_rings[BUF_RINGS];
   int fds[FD_COUNT];
   int active_bgid;
-  char mapped_buffs[BUF_RINGS][BG_ENTRIES][BUFFER_SIZE];
 } server_t;
 
 server_t *server_init(void);
@@ -100,12 +102,11 @@ void server_ev_loop_start(server_t *s, int fd);
 
 server_t *server_init(void) {
   server_t *s = mmap(NULL, sizeof(server_t), PROT_READ | PROT_WRITE,
-                     MAP_ANONYMOUS | MAP_PRIVATE | MAP_POPULATE , -1, 0);
+                     MAP_ANONYMOUS | MAP_PRIVATE | MAP_POPULATE, -1, 0);
   if (s == MAP_FAILED) {
     perror("mmap");
     exit(1);
   }
-
 
   struct io_uring_params params;
   assert(memset(&params, 0, sizeof(params)) != NULL);
@@ -134,22 +135,35 @@ server_t *server_init(void) {
 }
 
 void server_register_buf_rings(server_t *s) {
-  unsigned short i;
+  int i;
   for (i = 0; i < BUF_RINGS; ++i) {
-    int ret;
-    struct io_uring_buf_ring *br =
-        io_uring_setup_buf_ring(&s->ring, BG_ENTRIES, i, 0, &ret);
-    assert(ret == 0);
-    assert(br != NULL);
-    io_uring_buf_ring_init(br);
+    struct io_uring_buf_reg reg = {
+        .ring_addr = 0, .ring_entries = BG_ENTRIES, .bgid = i};
 
+    void *mbr =
+        mmap(NULL, (sizeof(struct io_uring_buf) + BUFFER_SIZE) * BG_ENTRIES,
+             PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
+    // printf("bg addr: %p\n", mbr);
+    assert(mbr != MAP_FAILED);
+
+    s->buf_rings[i] = (struct io_uring_buf_ring *)mbr;
+
+    io_uring_buf_ring_init(s->buf_rings[i]);
+
+    reg.ring_addr = (unsigned long)s->buf_rings[i];
+
+    assert(io_uring_register_buf_ring(&s->ring, &reg, 0) == 0);
+
+    char *buf_addr;
     for (size_t j = 0; j < BG_ENTRIES; ++j) {
-      io_uring_buf_ring_add(br, s->mapped_buffs[i][j], BUFFER_SIZE, j,
+      buf_addr =
+          (char *)s->buf_rings[i] + BUF_bASE_OFFSET + (j << BUF_SHIFT);
+      // printf("buf addr: %p\n", buf_addr);
+      io_uring_buf_ring_add(s->buf_rings[i], buf_addr, BUFFER_SIZE, j,
                             io_uring_buf_ring_mask(BG_ENTRIES), j);
     }
 
-    io_uring_buf_ring_advance(br, BG_ENTRIES);
-    s->buf_rings[i] = br;
+    io_uring_buf_ring_advance(s->buf_rings[i], BG_ENTRIES);
   }
 }
 
@@ -188,7 +202,8 @@ struct io_uring_sqe *must_get_sqe(server_t *s) {
 
 inline static char *server_get_selected_buffer(server_t *s, uint32_t bgid,
                                                uint32_t buf_idx) {
-  return s->mapped_buffs[bgid][buf_idx];
+
+  return (char *) s->buf_rings[bgid] + BUF_bASE_OFFSET + (buf_idx << BUF_SHIFT);
 }
 
 inline static int server_get_active_bgid(server_t *s) { return s->active_bgid; }
