@@ -46,7 +46,6 @@ SOFTWARE.
 #define CONN_BACKLOG 1024
 
 #define FD_MASK ((1ULL << 21) - 1) // 21 bits
-#define FD_SHIFT 0
 #define SRV_LIM_MAX_FD 2097151
 #define BGID_MASK (((1ULL << 17) - 1) << 21) // 17 bits shifted by 21
 #define BGID_SHIFT 21
@@ -64,7 +63,7 @@ SOFTWARE.
 #define FD_OPEN 1
 
 static inline void set_fd(uint64_t *data, uint32_t fd) {
-  *data = (*data & ~FD_MASK) | ((uint64_t)fd << FD_SHIFT);
+  *data = (*data & ~FD_MASK) | (uint64_t)fd;
 }
 
 static inline void set_bgid(uint64_t *data, uint32_t index) {
@@ -76,7 +75,7 @@ static inline void set_event(uint64_t *data, uint8_t event) {
 }
 
 static inline uint32_t get_fd(uint64_t data) {
-  return (data & FD_MASK) >> FD_SHIFT;
+  return (data & FD_MASK);
 }
 static inline uint32_t get_bgid(uint64_t data) {
   return (data & BGID_MASK) >> BGID_SHIFT;
