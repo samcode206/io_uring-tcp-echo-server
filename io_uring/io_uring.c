@@ -40,9 +40,9 @@ SOFTWARE.
 
 #define FD_COUNT 1024
 #define SQ_DEPTH 1024
-#define BUFFER_SIZE 1024 * 64
-#define BUF_RINGS 512  // must be power of 2
-#define BG_ENTRIES 256 // must be power of 2
+#define BUFFER_SIZE 1024 * 128
+#define BUF_RINGS 2  // must be power of 2
+#define BG_ENTRIES 512 // must be power of 2
 #define CONN_BACKLOG 1024
 
 #define FD_MASK ((1ULL << 21) - 1) // 21 bits
