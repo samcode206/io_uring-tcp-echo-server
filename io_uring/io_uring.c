@@ -36,10 +36,10 @@ SOFTWARE.
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
-// #include <sys/mman.h>
+#include <sys/mman.h>
 
 #define FD_COUNT 1024
-#define SQ_DEPTH 1024
+#define SQ_DEPTH 256
 #define BUFFER_SIZE 1024 * 128
 #define BUF_RINGS 2  // must be power of 2
 #define BG_ENTRIES 512 // must be power of 2
@@ -99,15 +99,13 @@ int server_socket_bind_listen(server_t *s, int port);
 void server_ev_loop_start(server_t *s, int fd);
 
 server_t *server_init(void) {
-  // server_t *s = mmap(NULL, sizeof(server_t), PROT_READ | PROT_WRITE,
-  //                    MAP_ANONYMOUS | MAP_SHARED | MAP_HUGETLB , -1, 0);
-  // if (s == MAP_FAILED) {
-  //   perror("mmap");
-  //   exit(1);
-  // }
+  server_t *s = mmap(NULL, sizeof(server_t), PROT_READ | PROT_WRITE,
+                     MAP_ANONYMOUS | MAP_PRIVATE | MAP_POPULATE , -1, 0);
+  if (s == MAP_FAILED) {
+    perror("mmap");
+    exit(1);
+  }
 
-  server_t *s = (server_t *)calloc(1, sizeof(server_t));
-  assert(s != NULL);
 
   struct io_uring_params params;
   assert(memset(&params, 0, sizeof(params)) != NULL);
@@ -115,9 +113,7 @@ server_t *server_init(void) {
   assert(memset(s->fds, FD_UNUSED, sizeof(int) * FD_COUNT) != NULL);
 
   // params.cq_entries = CQ_ENTRIES; also add IORING_SETUP_CQSIZE to flags
-  params.flags = IORING_SETUP_COOP_TASKRUN | IORING_SETUP_SINGLE_ISSUER |
-                 IORING_SETUP_SUBMIT_ALL | IORING_SETUP_TASKRUN_FLAG |
-                 IORING_SETUP_DEFER_TASKRUN;
+  params.flags = IORING_SETUP_COOP_TASKRUN | IORING_SETUP_SINGLE_ISSUER;
 
   assert(io_uring_queue_init_params(SQ_DEPTH, &s->ring, &params) == 0);
   assert(io_uring_register_files_sparse(&s->ring, FD_COUNT) == 0);
@@ -333,11 +329,11 @@ void server_ev_loop_start(server_t *s, int listener_fd) {
         server_add_multishot_recv(s, cqe->res);
         break;
       case EV_SEND:
-        if (cqe->res <= 0) {
-          printf("SEND FAILURE %d\n", cqe->res);
-        } else {
-          printf("SEND %d\n", cqe->res);
-        }
+        // if (cqe->res <= 0) {
+        //   printf("SEND FAILURE %d\n", cqe->res);
+        // } else {
+        //   printf("SEND %d\n", cqe->res);
+        // }
         break;
       case EV_CLOSE:
         if (cqe->res == 0) {
