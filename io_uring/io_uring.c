@@ -121,14 +121,14 @@ server_t *server_init(void) {
 
   server_register_buf_rings(s);
 
-  unsigned int args[2] = {0, 32};
-  int ret = io_uring_register_iowq_max_workers(&s->ring, args);
-  assert(ret == 0);
-  memset(args, 0, sizeof(args));
-  // call it again to get the current values after updating
-  io_uring_register_iowq_max_workers(&s->ring, args);
-  printf("server initialzed ring iow %d bounded: %d unbounded: %d\n", ret,
-         args[0], args[1]);
+  // unsigned int args[2] = {0, 32};
+  // int ret = io_uring_register_iowq_max_workers(&s->ring, args);
+  // assert(ret == 0);
+  // memset(args, 0, sizeof(args));
+  // // call it again to get the current values after updating
+  // io_uring_register_iowq_max_workers(&s->ring, args);
+  // printf("server initialzed ring iow %d bounded: %d unbounded: %d\n", ret,
+  //        args[0], args[1]);
 
   return s;
 }
