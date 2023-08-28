@@ -39,7 +39,7 @@ SOFTWARE.
 #include <sys/mman.h>
 
 #define FD_COUNT 1024
-#define SQ_DEPTH 256
+#define SQ_DEPTH 1024
 #define BUFFER_SIZE 1024 * 128
 #define BUF_RINGS 2  // must be power of 2
 #define BG_ENTRIES 512 // must be power of 2
