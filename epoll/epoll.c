@@ -59,7 +59,6 @@ static void evq_proccess_events(server_t *server, int epollfd,
         conn_ctx_unset_ev(conn, CONN_QUEUED);
         evq_delete_evqe(&server->evq);
       }
-  
     }
   }
 }
@@ -289,9 +288,7 @@ int main(int argc, char *argv[]) {
               assert(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, &ev) == 0);
               assert(close(fd) == 0);
               conn_clear(conn);
-            }
-
-            if (ret) {
+            } else if (ret) {
               conn_ctx_set_ev(conn, CONN_QUEUED);
               evq_add_evqe(&server->evq, (uint64_t)conn);
             };
