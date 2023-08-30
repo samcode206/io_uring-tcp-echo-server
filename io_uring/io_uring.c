@@ -44,7 +44,7 @@ SOFTWARE.
 
 #define SQ_DEPTH FD_COUNT
 #define BG_ENTRIES FD_COUNT
-#define BUF_bASE_OFFSET (sizeof(struct io_uring_buf) * BG_ENTRIES)
+#define BUF_BASE_OFFSET (sizeof(struct io_uring_buf) * BG_ENTRIES)
 
 #define BUF_SHIFT 17
 #define BUFF_CAP (1U << BUF_SHIFT) /* 131kb */
@@ -74,7 +74,7 @@ struct server_t {
 
 void server_register_buf_ring(server_t *s);
 
-int socket_bind_listen(int port);
+int server_socket_bind_listen(int port, int sockopts);
 
 static void server_add_multishot_accept(server_t *s, int listener_fd);
 
@@ -107,7 +107,7 @@ struct io_uring_sqe *must_get_sqe(server_t *s);
 // ---------------------------------------------------------------------
 
 int main(void) {
-  int fd = socket_bind_listen(9919);
+  int fd = server_socket_bind_listen(9919, SO_REUSEADDR);
   printf("io_uring backed TCP echo server starting on port: %d\n", 9919);
 
   server_t s;
@@ -183,7 +183,7 @@ void server_register_buf_ring(server_t *s) {
 
   char *buf_addr;
   for (size_t i = 0; i < BG_ENTRIES; ++i) {
-    buf_addr = (char *)s->buf_ring + BUF_bASE_OFFSET + (i << BUF_SHIFT);
+    buf_addr = (char *)s->buf_ring + BUF_BASE_OFFSET + (i << BUF_SHIFT);
     // printf("buf addr: %p\n", buf_addr);
     io_uring_buf_ring_add(s->buf_ring, buf_addr, BUFF_CAP, i,
                           io_uring_buf_ring_mask(BG_ENTRIES), i);
@@ -192,14 +192,14 @@ void server_register_buf_ring(server_t *s) {
   io_uring_buf_ring_advance(s->buf_ring, BG_ENTRIES);
 }
 
-int socket_bind_listen(int port) {
+int server_socket_bind_listen(int port, int sockopts) {
   int fd;
   struct sockaddr_in srv_addr;
 
   fd = socket(PF_INET, SOCK_STREAM, 0);
 
   int on = 1;
-  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(int));
+  setsockopt(fd, SOL_SOCKET, sockopts, &on, sizeof(int));
   memset(&srv_addr, 0, sizeof(srv_addr));
   srv_addr.sin_family = AF_INET;
   srv_addr.sin_port = htons(port);
@@ -213,7 +213,7 @@ int socket_bind_listen(int port) {
 static inline char *server_get_selected_buffer(server_t *s, uint32_t bgid,
                                                uint32_t buf_idx) {
 
-  return (char *)s->buf_ring + BUF_bASE_OFFSET + (buf_idx << BUF_SHIFT);
+  return (char *)s->buf_ring + BUF_BASE_OFFSET + (buf_idx << BUF_SHIFT);
 }
 
 static inline int server_conn_get_bgid(server_t *s) { return 0; }
