@@ -94,11 +94,11 @@ static void on_write(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe);
 
 static void on_close(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe);
 
-static inline char *server_get_selected_buffer(server_t *s, uint32_t buf_idx);
+static inline unsigned char *server_get_selected_buffer(server_t *s, uint32_t buf_idx);
 
 static inline int server_conn_get_bgid(server_t *s);
 
-static inline void server_recycle_buff(server_t *s, char *buf,
+static inline void server_recycle_buff(server_t *s, void *buf,
                                        uint32_t buf_idx);
 
 struct io_uring_sqe *must_get_sqe(server_t *s);
@@ -169,7 +169,6 @@ void server_register_buf_ring(server_t *s) {
   void *mbr = mmap(NULL, (sizeof(struct io_uring_buf) + BUFF_CAP) * BG_ENTRIES,
                    PROT_READ | PROT_WRITE,
                    MAP_ANON | MAP_PRIVATE | MAP_POPULATE, -1, 0);
-  printf("bg addr: %p\n", mbr);
   assert(mbr != MAP_FAILED);
 
   s->buf_ring = (struct io_uring_buf_ring *)mbr;
@@ -180,12 +179,13 @@ void server_register_buf_ring(server_t *s) {
 
   assert(io_uring_register_buf_ring(&s->ring, &reg, 0) == 0);
 
-  char *buf_addr;
+  unsigned char *buf_addr;
   for (size_t i = 0; i < BG_ENTRIES; ++i) {
-    buf_addr = server_get_selected_buffer(s, i);
-    printf("buf addr: %p\n", buf_addr);
+    buf_addr = (unsigned char *)s->buf_ring + BUF_BASE_OFFSET + (i << BUF_SHIFT);
     io_uring_buf_ring_add(s->buf_ring, buf_addr,
                           BUFF_CAP, i, io_uring_buf_ring_mask(BG_ENTRIES), i);
+        
+    assert(server_get_selected_buffer(s, i) == buf_addr);
   }
 
   io_uring_buf_ring_advance(s->buf_ring, BG_ENTRIES);
@@ -209,14 +209,13 @@ int server_socket_bind_listen(int port, int sockopts) {
   return fd;
 }
 
-static inline char *server_get_selected_buffer(server_t *s, uint32_t buf_idx) {
-
-  return (char *)s->buf_ring + BUF_BASE_OFFSET + (buf_idx << BUF_SHIFT);
+static inline unsigned char *server_get_selected_buffer(server_t *s, uint32_t buf_idx) {
+  return (unsigned char *)s->buf_ring->bufs[buf_idx].addr;
 }
 
 static inline int server_conn_get_bgid(server_t *s) { return 0; }
 
-static inline void server_recycle_buff(server_t *s, char *buf,
+static inline void server_recycle_buff(server_t *s, void *buf,
                                        uint32_t buf_idx) {
 
   io_uring_buf_ring_add(s->buf_ring, buf, BUFF_CAP, buf_idx,
@@ -312,7 +311,7 @@ static void on_read(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe) {
   } else {
     unsigned int buf_id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
     // printf("buffer-group: %d\tbuffer-id: %d\n", bgid, buf_id);
-    char *buf = server_get_selected_buffer(s, buf_id);
+    unsigned char *buf = server_get_selected_buffer(s, buf_id);
     // printf("%s\n", recv_buf);
     conn_set_buf_idx(&ctx, buf_id);
     server_add_send(s, &ctx, buf, cqe->res, IOSQE_FIXED_FILE, 0);
@@ -326,7 +325,7 @@ static void on_write(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe) {
   } else {
     uint32_t buf_idx = conn_get_buf_idx(ctx);
     //   printf("buffer-group: %d\tbuffer-id: %d\n", bgid, buf_idx);
-    char *buf = server_get_selected_buffer(s, buf_idx);
+    unsigned char *buf = server_get_selected_buffer(s, buf_idx);
     server_recycle_buff(s, buf, buf_idx);
     server_add_recv(s, conn_get_fd(ctx));
   }
