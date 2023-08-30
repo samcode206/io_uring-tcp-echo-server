@@ -22,6 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 */
+#include "conn.h"
 #include <assert.h>
 #include <ctype.h>
 #include <fcntl.h>
@@ -39,135 +40,159 @@ SOFTWARE.
 #include <unistd.h>
 
 #define FD_COUNT 1024
-#define SQ_DEPTH 1024
+#define LISTEN_BACKLOG 1024
 
-#define BUF_SHIFT 17
-#define BUFFER_SIZE (1U << BUF_SHIFT) /* 131kb */
-#define BUF_RINGS 2                   // must be power of 2
-#define BG_ENTRIES 1024                  // must be power of 2
+#define SQ_DEPTH FD_COUNT
+#define BG_ENTRIES FD_COUNT
 #define BUF_bASE_OFFSET (sizeof(struct io_uring_buf) * BG_ENTRIES)
 
-#define CONN_BACKLOG 1024
-
-#define FD_MASK ((1ULL << 21) - 1) // 21 bits
-#define SRV_LIM_MAX_FD 2097151
-#define BGID_MASK (((1ULL << 17) - 1) << 21) // 17 bits shifted by 21
-#define BGID_SHIFT 21
-#define SRV_LIM_MAX_BGS 131071
-#define EVENT_MASK (3ULL << 38) // 2 bits shifted by 38
-#define EVENT_SHIFT 38
+#define BUF_SHIFT 17
+#define BUFF_CAP (1U << BUF_SHIFT) /* 131kb */
 
 #define EV_ACCEPT 0
 #define EV_RECV 1
 #define EV_SEND 2
 #define EV_CLOSE 3
 
-#define FD_UNUSED -1
-#define FD_CLOSING -2
-#define FD_OPEN 1
+#define LIKELY(x) __builtin_expect(!!(x), 1)
+#define UNLIKELY(x) __builtin_expect(!!(x), 0)
 
-static inline void set_fd(uint64_t *data, uint32_t fd) {
-  *data = (*data & ~FD_MASK) | (uint64_t)fd;
-}
+static_assert(!(BG_ENTRIES & (BG_ENTRIES - 1)),
+              "BG_ENTRIES must be a power of two");
 
-static inline void set_bgid(uint64_t *data, uint32_t index) {
-  *data = (*data & ~BGID_MASK) | ((uint64_t)index << BGID_SHIFT);
-}
+static_assert(!(SQ_DEPTH & (SQ_DEPTH - 1)), "SQ_DEPTH must be a power of two");
 
-static inline void set_event(uint64_t *data, uint8_t event) {
-  *data = (*data & ~EVENT_MASK) | ((uint64_t)event << EVENT_SHIFT);
-}
+typedef struct server_t server_t;
+typedef void (*io_event_cb)(server_t *s, uint_fast64_t ctx,
+                            struct io_uring_cqe *cqe);
 
-static inline uint32_t get_fd(uint64_t data) { return (data & FD_MASK); }
+struct server_t {
+  struct io_uring ring;               // the ring
+  struct io_uring_buf_ring *buf_ring; // ring mapped buffer
+  io_event_cb ev_handlers[4];         // completion queue entry handlers
+};
 
-static inline uint32_t get_bgid(uint64_t data) {
-  return (data & BGID_MASK) >> BGID_SHIFT;
-}
-static inline uint8_t get_event(uint64_t data) {
-  return (data & EVENT_MASK) >> EVENT_SHIFT;
-}
+void server_register_buf_ring(server_t *s);
 
-typedef struct {
-  struct io_uring ring;
-  struct io_uring_buf_ring *buf_rings[BUF_RINGS];
-  int fds[FD_COUNT];
-  int active_bgid;
-} server_t;
+int socket_bind_listen(int port);
 
-server_t *server_init(void);
+static void server_add_multishot_accept(server_t *s, int listener_fd);
 
-void server_register_buf_rings(server_t *s);
-int server_socket_bind_listen(server_t *s, int port);
-void server_ev_loop_start(server_t *s, int fd);
+static void server_add_recv(server_t *s, int fd);
 
-server_t *server_init(void) {
-  server_t *s = mmap(NULL, sizeof(server_t), PROT_READ | PROT_WRITE,
-                     MAP_ANONYMOUS | MAP_PRIVATE | MAP_POPULATE, -1, 0);
-  if (s == MAP_FAILED) {
-    perror("mmap");
-    exit(1);
-  }
+static inline void server_add_send(server_t *s, uint_fast64_t *ctx,
+                                   const void *data, size_t len,
+                                   uint32_t sqe_flags, uint32_t send_flags);
+
+static void server_add_close_direct(server_t *s, uint32_t fd);
+
+static void on_accept(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe);
+
+static void on_read(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe);
+
+static void on_write(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe);
+
+static void on_close(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe);
+
+inline static char *server_get_selected_buffer(server_t *s, uint32_t bgid,
+                                               uint32_t buf_idx);
+
+inline static int server_conn_get_bgid(server_t *s);
+
+inline static void server_recycle_buff(server_t *s, char *buf, uint32_t bgid,
+                                       uint32_t buf_idx);
+
+struct io_uring_sqe *must_get_sqe(server_t *s);
+
+// ---------------------------------------------------------------------
+
+int main(void) {
+  int fd = socket_bind_listen(9919);
+  printf("io_uring backed TCP echo server starting on port: %d\n", 9919);
+
+  server_t s;
+  memset(&s, 0, sizeof s);
+
+  s.ev_handlers[EV_ACCEPT] = on_accept;
+  s.ev_handlers[EV_RECV] = on_read;
+  s.ev_handlers[EV_SEND] = on_write;
+  s.ev_handlers[EV_CLOSE] = on_close;
 
   struct io_uring_params params;
   assert(memset(&params, 0, sizeof(params)) != NULL);
 
-  assert(memset(s->fds, FD_UNUSED, sizeof(int) * FD_COUNT) != NULL);
-
   // params.cq_entries = CQ_ENTRIES; also add IORING_SETUP_CQSIZE to flags
   params.flags = IORING_SETUP_COOP_TASKRUN | IORING_SETUP_SINGLE_ISSUER;
 
-  assert(io_uring_queue_init_params(SQ_DEPTH, &s->ring, &params) == 0);
-  assert(io_uring_register_files_sparse(&s->ring, FD_COUNT) == 0);
-  assert(io_uring_register_ring_fd(&s->ring) == 1);
+  assert(io_uring_queue_init_params(SQ_DEPTH, &s.ring, &params) == 0);
+  assert(io_uring_register_files_sparse(&s.ring, FD_COUNT) == 0);
+  assert(io_uring_register_ring_fd(&s.ring) == 1);
 
-  server_register_buf_rings(s);
+  server_register_buf_ring(&s);
+  server_add_multishot_accept(&s, fd);
 
-  // unsigned int args[2] = {0, 32};
-  // int ret = io_uring_register_iowq_max_workers(&s->ring, args);
-  // assert(ret == 0);
-  // memset(args, 0, sizeof(args));
-  // // call it again to get the current values after updating
-  // io_uring_register_iowq_max_workers(&s->ring, args);
-  // printf("server initialzed ring iow %d bounded: %d unbounded: %d\n", ret,
-  //        args[0], args[1]);
+  for (;;) {
+    // printf("start loop iteration\n");
+    int ret = io_uring_submit_and_wait(&s.ring, 1);
+    assert(ret >= 0); // todo(sah): handle more gracefully
 
-  return s;
-}
+    // printf("io_uring_submit_and_wait: %d\n", ret);
+    struct io_uring_cqe *cqe;
+    unsigned head;
+    unsigned i = 0;
 
-void server_register_buf_rings(server_t *s) {
-  int i;
-  for (i = 0; i < BUF_RINGS; ++i) {
-    struct io_uring_buf_reg reg = {
-        .ring_addr = 0, .ring_entries = BG_ENTRIES, .bgid = i};
+    io_uring_for_each_cqe(&s.ring, head, cqe) {
+      ++i;
+      uint64_t ctx = io_uring_cqe_get_data64(cqe);
+      uint8_t ev = conn_get_event(ctx);
 
-    void *mbr =
-        mmap(NULL, (sizeof(struct io_uring_buf) + BUFFER_SIZE) * BG_ENTRIES,
-             PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
-    // printf("bg addr: %p\n", mbr);
-    assert(mbr != MAP_FAILED);
+      s.ev_handlers[ev](&s, ctx, cqe);
+    };
 
-    s->buf_rings[i] = (struct io_uring_buf_ring *)mbr;
-
-    io_uring_buf_ring_init(s->buf_rings[i]);
-
-    reg.ring_addr = (unsigned long)s->buf_rings[i];
-
-    assert(io_uring_register_buf_ring(&s->ring, &reg, 0) == 0);
-
-    char *buf_addr;
-    for (size_t j = 0; j < BG_ENTRIES; ++j) {
-      buf_addr =
-          (char *)s->buf_rings[i] + BUF_bASE_OFFSET + (j << BUF_SHIFT);
-      // printf("buf addr: %p\n", buf_addr);
-      io_uring_buf_ring_add(s->buf_rings[i], buf_addr, BUFFER_SIZE, j,
-                            io_uring_buf_ring_mask(BG_ENTRIES), j);
-    }
-
-    io_uring_buf_ring_advance(s->buf_rings[i], BG_ENTRIES);
+    // printf("end loop iteration cqes seen %d\n", i);
+    io_uring_cq_advance(&s.ring, i);
   }
+
+  printf("exiting event loop\n");
+  io_uring_queue_exit(&s.ring);
+
+  close(fd);
+
+  return 0;
 }
 
-int server_socket_bind_listen(server_t *s, int port) {
+// ---------------------------------------------------------------------
+
+void server_register_buf_ring(server_t *s) {
+  struct io_uring_buf_reg reg = {
+      .ring_addr = 0, .ring_entries = BG_ENTRIES, .bgid = 0};
+
+  void *mbr = mmap(NULL, (sizeof(struct io_uring_buf) + BUFF_CAP) * BG_ENTRIES,
+                   PROT_READ | PROT_WRITE,
+                   MAP_ANON | MAP_PRIVATE | MAP_POPULATE, -1, 0);
+  // printf("bg addr: %p\n", mbr);
+  assert(mbr != MAP_FAILED);
+
+  s->buf_ring = (struct io_uring_buf_ring *)mbr;
+
+  io_uring_buf_ring_init(s->buf_ring);
+
+  reg.ring_addr = (unsigned long)s->buf_ring;
+
+  assert(io_uring_register_buf_ring(&s->ring, &reg, 0) == 0);
+
+  char *buf_addr;
+  for (size_t i = 0; i < BG_ENTRIES; ++i) {
+    buf_addr = (char *)s->buf_ring + BUF_bASE_OFFSET + (i << BUF_SHIFT);
+    // printf("buf addr: %p\n", buf_addr);
+    io_uring_buf_ring_add(s->buf_ring, buf_addr, BUFF_CAP, i,
+                          io_uring_buf_ring_mask(BG_ENTRIES), i);
+  }
+
+  io_uring_buf_ring_advance(s->buf_ring, BG_ENTRIES);
+}
+
+int socket_bind_listen(int port) {
   int fd;
   struct sockaddr_in srv_addr;
 
@@ -181,8 +206,25 @@ int server_socket_bind_listen(server_t *s, int port) {
   srv_addr.sin_addr.s_addr = htons(INADDR_ANY); /* 0.0.0.0 */
 
   assert(bind(fd, (const struct sockaddr *)&srv_addr, sizeof(srv_addr)) >= 0);
-  assert(listen(fd, CONN_BACKLOG) >= 0);
+  assert(listen(fd, LISTEN_BACKLOG) >= 0);
   return fd;
+}
+
+inline static char *server_get_selected_buffer(server_t *s, uint32_t bgid,
+                                               uint32_t buf_idx) {
+
+  return (char *)s->buf_ring + BUF_bASE_OFFSET + (buf_idx << BUF_SHIFT);
+}
+
+inline static int server_conn_get_bgid(server_t *s) { return 0; }
+
+inline static void server_recycle_buff(server_t *s, char *buf, uint32_t bgid,
+                                       uint32_t buf_idx) {
+
+  io_uring_buf_ring_add(s->buf_ring, buf, BUFF_CAP, buf_idx,
+                        io_uring_buf_ring_mask(BG_ENTRIES), 0);
+
+  io_uring_buf_ring_advance(s->buf_ring, 1);
 }
 
 struct io_uring_sqe *must_get_sqe(server_t *s) {
@@ -200,28 +242,7 @@ struct io_uring_sqe *must_get_sqe(server_t *s) {
   return sqe;
 }
 
-inline static char *server_get_selected_buffer(server_t *s, uint32_t bgid,
-                                               uint32_t buf_idx) {
-
-  return (char *) s->buf_rings[bgid] + BUF_bASE_OFFSET + (buf_idx << BUF_SHIFT);
-}
-
-inline static int server_get_active_bgid(server_t *s) { return s->active_bgid; }
-
-inline static void server_active_bgid_next(server_t *s) {
-  s->active_bgid = (s->active_bgid + 1) & (BUF_RINGS - 1);
-}
-
-inline static void server_release_one_buf(server_t *s, char *buf, uint32_t bgid,
-                                          uint32_t buf_idx) {
-
-  io_uring_buf_ring_add(s->buf_rings[bgid], buf, BUFFER_SIZE, buf_idx,
-                        io_uring_buf_ring_mask(BG_ENTRIES), 0);
-
-  io_uring_buf_ring_advance(s->buf_rings[bgid], 1);
-}
-
-int server_add_multishot_accept(server_t *s, int listener_fd) {
+static void server_add_multishot_accept(server_t *s, int listener_fd) {
   struct io_uring_sqe *accept_ms_sqe = must_get_sqe(s);
   struct sockaddr_in client_addr;
 
@@ -232,148 +253,92 @@ int server_add_multishot_accept(server_t *s, int listener_fd) {
                                         &client_addr_len, 0);
 
   uint64_t accept_ctx = 0;
-  set_event(&accept_ctx, EV_ACCEPT);
+  conn_set_event(&accept_ctx, EV_ACCEPT);
   io_uring_sqe_set_data64(accept_ms_sqe, accept_ctx);
-
-  return 0;
 }
 
-int server_add_multishot_recv(server_t *s, int fd) {
+static void server_add_recv(server_t *s, int fd) {
   struct io_uring_sqe *sqe = must_get_sqe(s);
-  io_uring_prep_recv_multishot(sqe, fd, NULL, 0, 0);
+  io_uring_prep_recv(sqe, fd, NULL, 0, 0);
   io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE | IOSQE_BUFFER_SELECT);
   uint64_t recv_ctx = 0;
-  set_event(&recv_ctx, EV_RECV);
-  set_fd(&recv_ctx, fd);
-  set_bgid(&recv_ctx, server_get_active_bgid(s));
+  conn_set_event(&recv_ctx, EV_RECV);
+  conn_set_fd(&recv_ctx, fd);
+  conn_set_bgid(&recv_ctx, server_conn_get_bgid(s));
   io_uring_sqe_set_data64(sqe, recv_ctx);
-  sqe->buf_group = server_get_active_bgid(s);
-  return 0;
+  sqe->buf_group = server_conn_get_bgid(s);
 }
 
-void server_add_close_direct(server_t *s, uint32_t fd) {
-  if (s->fds[fd] != FD_CLOSING) {
-    struct io_uring_sqe *sqe = must_get_sqe(s);
-
-    sqe->fd = fd;
-    s->fds[fd] = FD_CLOSING;
-    io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
-    io_uring_prep_close_direct(sqe, fd);
-
-    uint64_t close_ctx = 0;
-    set_event(&close_ctx, EV_CLOSE);
-    set_fd(&close_ctx, fd);
-
-    io_uring_sqe_set_data64(sqe, close_ctx);
-  }
-}
-
-static inline void server_handle_recv_err(server_t *s, int err, uint64_t ctx) {
-  if (err == 0) {
-    server_add_close_direct(s, get_fd(ctx));
-  } else if (err == -ENOBUFS) { // NOTE: this would keep spinning if all groups
-                                // have no buffers, might wanna add a limit
-    // printf("ran out of buffers for gid: %d ", get_bgid(ctx));
-    server_active_bgid_next(s);
-    // printf("moving to next buffer group id: %d\n",
-    // server_get_active_bgid(s));
-    server_add_multishot_recv(s, get_fd(ctx));
-  } else {
-    printf("RECV err: %d\n", err);
-    server_add_close_direct(s, get_fd(ctx));
-  }
-}
-
-static inline void server_add_send(server_t *s, uint32_t fd, const void *data,
-                                   size_t len, uint32_t sqe_flags,
-                                   uint32_t send_flags) {
+static inline void server_add_send(server_t *s, uint_fast64_t *ctx,
+                                   const void *data, size_t len,
+                                   uint32_t sqe_flags, uint32_t send_flags) {
+  int fd = conn_get_fd(*ctx);
   struct io_uring_sqe *sqe = must_get_sqe(s);
   io_uring_prep_send(sqe, fd, data, len, send_flags);
   io_uring_sqe_set_flags(sqe, sqe_flags);
-  uint64_t send_ctx = 0;
-  set_fd(&send_ctx, fd);
-  set_event(&send_ctx, EV_SEND);
-  io_uring_sqe_set_data64(sqe, send_ctx);
+
+  conn_set_event(ctx, EV_SEND);
+  io_uring_sqe_set_data64(sqe, *ctx);
 }
 
-void server_ev_loop_start(server_t *s, int listener_fd) {
-  server_add_multishot_accept(s, listener_fd);
+static void server_add_close_direct(server_t *s, uint32_t fd) {
+  struct io_uring_sqe *sqe = must_get_sqe(s);
+  sqe->fd = fd;
+  io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
+  io_uring_prep_close_direct(sqe, fd);
 
-  for (;;) {
-    // printf("start loop iteration\n");
-    int ret = io_uring_submit_and_wait(&s->ring, 1);
-    assert(ret >= 0); // todo remove and add real error handling
+  uint64_t close_ctx = 0;
+  conn_set_event(&close_ctx, EV_CLOSE);
+  conn_set_fd(&close_ctx, fd);
 
-    // printf("io_uring_submit_and_wait: %d\n", ret);
-    struct io_uring_cqe *cqe;
-    unsigned head;
-    unsigned i = 0;
+  io_uring_sqe_set_data64(sqe, close_ctx);
+}
 
-    io_uring_for_each_cqe(&s->ring, head, cqe) {
-      ++i;
-      uint64_t ctx = io_uring_cqe_get_data64(cqe);
-      uint8_t ev = get_event(ctx);
+static void on_accept(server_t *s, uint_fast64_t ctx,
+                      struct io_uring_cqe *cqe) {
+  if (UNLIKELY(cqe->res < 0)) {
+    printf("accept error: %d exiting...\n", cqe->res);
+    exit(1);
+  }
+  server_add_recv(s, cqe->res);
+}
 
-      switch (ev) {
-      case EV_RECV:
-        if (cqe->res <= 0) {
-          server_handle_recv_err(s, cqe->res, ctx);
-        } else {
-          // printf("RECV %d\n", cqe->res);
-          unsigned int buf_id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
-          uint32_t bgid = get_bgid(ctx);
-          // printf("buffer-group: %d\tbuffer-id: %d\n", bgid, buf_id);
-          char *recv_buf = server_get_selected_buffer(s, bgid, buf_id);
-          // printf("%s\n", recv_buf);
-          uint32_t sender_fd = get_fd(ctx);
-          if (s->fds[sender_fd] == FD_OPEN) {
-            server_add_send(s, sender_fd, recv_buf, cqe->res,
-                            IOSQE_FIXED_FILE | IOSQE_CQE_SKIP_SUCCESS, 0);
-          }
-
-          server_release_one_buf(s, recv_buf, bgid, buf_id);
-        }
-        break;
-      case EV_ACCEPT:
-        if (cqe->res < 0) {
-          printf("accept error: %d exiting...\n", cqe->res);
-          exit(1);
-        }
-        // printf("ACCEPT %d\n", cqe->res);
-        s->fds[cqe->res] = FD_OPEN;
-        server_add_multishot_recv(s, cqe->res);
-        break;
-      case EV_SEND:
-        // if (cqe->res <= 0) {
-        //   printf("SEND FAILURE %d\n", cqe->res);
-        // } else {
-        //   printf("SEND %d\n", cqe->res);
-        // }
-        break;
-      case EV_CLOSE:
-        if (cqe->res == 0) {
-          uint32_t closed_fd = get_fd(ctx);
-          // printf("file closed %d\n", closed_fd);
-          s->fds[closed_fd] = FD_UNUSED;
-        } else {
-          printf("close error: %d\n", cqe->res);
-        }
-        break;
-      }
-    };
-    // printf("end loop iteration cqes seen %d\n", i);
-    io_uring_cq_advance(&s->ring, i);
+static void on_read(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe) {
+  if (UNLIKELY(cqe->res <= 0)) {
+    if (cqe->res == -ENOBUFS) {
+      fprintf(stderr, "ran out of buffers exiting program...\n");
+      exit(-ENOBUFS);
+    } else {
+      server_add_close_direct(s, conn_get_fd(ctx));
+    }
+  } else {
+    // printf("RECV %d\n", cqe->res);
+    unsigned int buf_id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
+    uint32_t bgid = conn_get_bgid(ctx);
+    // printf("buffer-group: %d\tbuffer-id: %d\n", bgid, buf_id);
+    char *buf = server_get_selected_buffer(s, bgid, buf_id);
+    // printf("%s\n", recv_buf);
+    conn_set_buf_idx(&ctx, buf_id);
+    server_add_send(s, &ctx, buf, cqe->res, IOSQE_FIXED_FILE, 0);
   }
 }
 
-int main(void) {
-  server_t *s = server_init();
-  assert(s != NULL);
-  int fd = server_socket_bind_listen(s, 9919);
-  printf("io_uring backed TCP echo server starting on port: %d\n", 9919);
-  server_ev_loop_start(s, fd);
+static void on_write(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe) {
+  if (UNLIKELY(cqe->res <= 0)) {
+    fprintf(stderr, "send(): %s\n", strerror(-cqe->res));
+    server_add_close_direct(s, conn_get_fd(ctx));
+  } else {
+    uint32_t bgid = conn_get_bgid(ctx);
+    uint32_t buf_idx = conn_get_buf_idx(ctx);
+    //   printf("buffer-group: %d\tbuffer-id: %d\n", bgid, buf_idx);
+    char *buf = server_get_selected_buffer(s, bgid, buf_idx);
+    server_recycle_buff(s, buf, bgid, buf_idx);
+    server_add_recv(s, conn_get_fd(ctx));
+  }
+}
 
-  close(fd);
-
-  return 0;
+static void on_close(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe) {
+  if (cqe->res < 0) {
+    fprintf(stderr, "close: %s\n", strerror(-cqe->res));
+  }
 }
