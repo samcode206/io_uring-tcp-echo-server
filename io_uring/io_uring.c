@@ -46,9 +46,7 @@ SOFTWARE.
 #define BG_ENTRIES FD_COUNT
 #define BUF_BASE_OFFSET (sizeof(struct io_uring_buf) * BG_ENTRIES)
 
-#define BUF_SHIFT 17
-#define BUFF_CAP (1U << BUF_SHIFT) /* 131kb */
-
+#define BUFF_CAP 1024 * 128
 #define EV_ACCEPT 0
 #define EV_RECV 1
 #define EV_SEND 2
@@ -181,7 +179,7 @@ void server_register_buf_ring(server_t *s) {
 
   unsigned char *buf_addr;
   for (size_t i = 0; i < BG_ENTRIES; ++i) {
-    buf_addr = (unsigned char *)s->buf_ring + BUF_BASE_OFFSET + (i << BUF_SHIFT);
+    buf_addr = (unsigned char *)s->buf_ring + BUF_BASE_OFFSET + (i * BUFF_CAP);
     io_uring_buf_ring_add(s->buf_ring, buf_addr,
                           BUFF_CAP, i, io_uring_buf_ring_mask(BG_ENTRIES), i);
         
