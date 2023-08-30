@@ -94,12 +94,12 @@ static void on_write(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe);
 
 static void on_close(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe);
 
-inline static char *server_get_selected_buffer(server_t *s, uint32_t bgid,
+static inline char *server_get_selected_buffer(server_t *s, uint32_t bgid,
                                                uint32_t buf_idx);
 
-inline static int server_conn_get_bgid(server_t *s);
+static inline int server_conn_get_bgid(server_t *s);
 
-inline static void server_recycle_buff(server_t *s, char *buf, uint32_t bgid,
+static inline void server_recycle_buff(server_t *s, char *buf, uint32_t bgid,
                                        uint32_t buf_idx);
 
 struct io_uring_sqe *must_get_sqe(server_t *s);
@@ -210,15 +210,15 @@ int socket_bind_listen(int port) {
   return fd;
 }
 
-inline static char *server_get_selected_buffer(server_t *s, uint32_t bgid,
+static inline char *server_get_selected_buffer(server_t *s, uint32_t bgid,
                                                uint32_t buf_idx) {
 
   return (char *)s->buf_ring + BUF_bASE_OFFSET + (buf_idx << BUF_SHIFT);
 }
 
-inline static int server_conn_get_bgid(server_t *s) { return 0; }
+static inline int server_conn_get_bgid(server_t *s) { return 0; }
 
-inline static void server_recycle_buff(server_t *s, char *buf, uint32_t bgid,
+static inline void server_recycle_buff(server_t *s, char *buf, uint32_t bgid,
                                        uint32_t buf_idx) {
 
   io_uring_buf_ring_add(s->buf_ring, buf, BUFF_CAP, buf_idx,
@@ -312,7 +312,6 @@ static void on_read(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe) {
       server_add_close_direct(s, conn_get_fd(ctx));
     }
   } else {
-    // printf("RECV %d\n", cqe->res);
     unsigned int buf_id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
     uint32_t bgid = conn_get_bgid(ctx);
     // printf("buffer-group: %d\tbuffer-id: %d\n", bgid, buf_id);
