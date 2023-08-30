@@ -46,7 +46,7 @@ SOFTWARE.
 #define BG_ENTRIES FD_COUNT
 #define BUF_BASE_OFFSET (sizeof(struct io_uring_buf) * BG_ENTRIES)
 
-#define BUFF_CAP 1024 * 128
+#define BUFF_CAP 1024
 #define EV_ACCEPT 0
 #define EV_RECV 1
 #define EV_SEND 2
@@ -92,7 +92,8 @@ static void on_write(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe);
 
 static void on_close(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe);
 
-static inline unsigned char *server_get_selected_buffer(server_t *s, uint32_t buf_idx);
+static inline unsigned char *server_get_selected_buffer(server_t *s,
+                                                        uint32_t buf_idx);
 
 static inline int server_conn_get_bgid(server_t *s);
 
@@ -118,8 +119,9 @@ int main(void) {
   struct io_uring_params params;
   assert(memset(&params, 0, sizeof(params)) != NULL);
 
-  // params.cq_entries = CQ_ENTRIES; also add IORING_SETUP_CQSIZE to flags
-  params.flags = IORING_SETUP_COOP_TASKRUN | IORING_SETUP_SINGLE_ISSUER;
+  params.flags = IORING_SETUP_COOP_TASKRUN | IORING_SETUP_DEFER_TASKRUN |
+                 IORING_SETUP_SINGLE_ISSUER;
+
 
   assert(io_uring_queue_init_params(SQ_DEPTH, &s.ring, &params) == 0);
   assert(io_uring_register_files_sparse(&s.ring, FD_COUNT) == 0);
@@ -180,9 +182,9 @@ void server_register_buf_ring(server_t *s) {
   unsigned char *buf_addr;
   for (size_t i = 0; i < BG_ENTRIES; ++i) {
     buf_addr = (unsigned char *)s->buf_ring + BUF_BASE_OFFSET + (i * BUFF_CAP);
-    io_uring_buf_ring_add(s->buf_ring, buf_addr,
-                          BUFF_CAP, i, io_uring_buf_ring_mask(BG_ENTRIES), i);
-        
+    io_uring_buf_ring_add(s->buf_ring, buf_addr, BUFF_CAP, i,
+                          io_uring_buf_ring_mask(BG_ENTRIES), i);
+
     assert(server_get_selected_buffer(s, i) == buf_addr);
   }
 
@@ -207,7 +209,8 @@ int server_socket_bind_listen(int port, int sockopts) {
   return fd;
 }
 
-static inline unsigned char *server_get_selected_buffer(server_t *s, uint32_t buf_idx) {
+static inline unsigned char *server_get_selected_buffer(server_t *s,
+                                                        uint32_t buf_idx) {
   return (unsigned char *)s->buf_ring->bufs[buf_idx].addr;
 }
 
