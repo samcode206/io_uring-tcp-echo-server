@@ -1,0 +1,22 @@
+--------------------------------
+address: 127.0.0.1:9919	mode: req-res	payload: 16.4 kB	duration: 3m0s	connections: 8
+Connection metrics:
+[Conn 1] sent: 83.2 GB, received: 83.2 GB, requests: 5077365, responses: 5077365 sent/sec: 462.2 MB recv/sec 462.2 MB req/sec: 28207 res/sec 28207 avg-res-time: 35.399µs
+[Conn 2] sent: 83.2 GB, received: 83.2 GB, requests: 5077302, responses: 5077301 sent/sec: 462.1 MB recv/sec 462.1 MB req/sec: 28207 res/sec 28207 avg-res-time: 35.399µs
+[Conn 3] sent: 83.2 GB, received: 83.2 GB, requests: 5077598, responses: 5077597 sent/sec: 462.2 MB recv/sec 462.2 MB req/sec: 28208 res/sec 28208 avg-res-time: 35.399µs
+[Conn 4] sent: 83.2 GB, received: 83.2 GB, requests: 5077614, responses: 5077613 sent/sec: 462.2 MB recv/sec 462.2 MB req/sec: 28208 res/sec 28208 avg-res-time: 35.399µs
+[Conn 5] sent: 83.2 GB, received: 83.2 GB, requests: 5077455, responses: 5077454 sent/sec: 462.2 MB recv/sec 462.2 MB req/sec: 28208 res/sec 28208 avg-res-time: 35.399µs
+[Conn 6] sent: 83.2 GB, received: 83.2 GB, requests: 5077513, responses: 5077512 sent/sec: 462.2 MB recv/sec 462.2 MB req/sec: 28208 res/sec 28208 avg-res-time: 35.401µs
+[Conn 7] sent: 83.2 GB, received: 83.2 GB, requests: 5077493, responses: 5077493 sent/sec: 462.2 MB recv/sec 462.2 MB req/sec: 28208 res/sec 28208 avg-res-time: 35.399µs
+[Conn 8] sent: 83.2 GB, received: 83.2 GB, requests: 5077666, responses: 5077665 sent/sec: 462.2 MB recv/sec 462.2 MB req/sec: 28209 res/sec 28209 avg-res-time: 35.399µs
+--------------------------------
+
+total-sent/second:              3.7 GB
+total-received/second:          3.7 GB
+total-requests/second:          225666
+total-responses/second:         225666
+total-bytes-sent:               665.5 GB 
+total-bytes-received:           665.5 GB 
+total-requests-sent:            40620006 
+total-responses-received:       40620000
+avg-response-time:           35.399µs

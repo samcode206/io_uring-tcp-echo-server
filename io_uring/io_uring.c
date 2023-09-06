@@ -46,7 +46,7 @@ SOFTWARE.
 #define BG_ENTRIES FD_COUNT
 #define BUF_BASE_OFFSET (sizeof(struct io_uring_buf) * BG_ENTRIES)
 
-#define BUFF_CAP 1024
+#define BUFF_CAP 1024 * 8
 #define EV_ACCEPT 0
 #define EV_RECV 1
 #define EV_SEND 2
@@ -121,7 +121,6 @@ int main(void) {
 
   params.flags = IORING_SETUP_COOP_TASKRUN | IORING_SETUP_DEFER_TASKRUN |
                  IORING_SETUP_SINGLE_ISSUER;
-
 
   assert(io_uring_queue_init_params(SQ_DEPTH, &s.ring, &params) == 0);
   assert(io_uring_register_files_sparse(&s.ring, FD_COUNT) == 0);
@@ -320,16 +319,17 @@ static void on_read(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe) {
 }
 
 static void on_write(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe) {
+  uint32_t buf_idx = conn_get_buf_idx(ctx);
+  //   printf("buffer-group: %d\tbuffer-id: %d\n", bgid, buf_idx);
+  unsigned char *buf = server_get_selected_buffer(s, buf_idx);
   if (UNLIKELY(cqe->res <= 0)) {
     fprintf(stderr, "send(): %s\n", strerror(-cqe->res));
     server_add_close_direct(s, conn_get_fd(ctx));
   } else {
-    uint32_t buf_idx = conn_get_buf_idx(ctx);
-    //   printf("buffer-group: %d\tbuffer-id: %d\n", bgid, buf_idx);
-    unsigned char *buf = server_get_selected_buffer(s, buf_idx);
-    server_recycle_buff(s, buf, buf_idx);
     server_add_recv(s, conn_get_fd(ctx));
   }
+
+  server_recycle_buff(s, buf, buf_idx);
 }
 
 static void on_close(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe) {

@@ -1,0 +1,21 @@
+--------------------------------
+address: 127.0.0.1:9919	mode: stream	payload: 32.8 kB	duration: 3m0s	connections: 8
+Connection metrics:
+[Conn 1] sent: 89.4 GB, received: 89.4 GB, requests: 2729259, responses: 2728987 sent/sec: 496.8 MB recv/sec 496.8 MB req/sec: 15162 res/sec 15161
+[Conn 2] sent: 89.4 GB, received: 89.4 GB, requests: 2729281, responses: 2728987 sent/sec: 496.9 MB recv/sec 496.8 MB req/sec: 15162 res/sec 15161
+[Conn 3] sent: 89.4 GB, received: 89.4 GB, requests: 2729277, responses: 2728987 sent/sec: 496.8 MB recv/sec 496.8 MB req/sec: 15162 res/sec 15161
+[Conn 4] sent: 89.4 GB, received: 89.4 GB, requests: 2729253, responses: 2728987 sent/sec: 496.8 MB recv/sec 496.8 MB req/sec: 15162 res/sec 15161
+[Conn 5] sent: 89.4 GB, received: 89.4 GB, requests: 2729267, responses: 2728987 sent/sec: 496.8 MB recv/sec 496.8 MB req/sec: 15162 res/sec 15161
+[Conn 6] sent: 89.4 GB, received: 89.4 GB, requests: 2729275, responses: 2728987 sent/sec: 496.8 MB recv/sec 496.8 MB req/sec: 15162 res/sec 15161
+[Conn 7] sent: 89.4 GB, received: 89.4 GB, requests: 2729288, responses: 2728985 sent/sec: 496.9 MB recv/sec 496.8 MB req/sec: 15162 res/sec 15161
+[Conn 8] sent: 89.4 GB, received: 89.4 GB, requests: 2729282, responses: 2728986 sent/sec: 496.9 MB recv/sec 496.8 MB req/sec: 15162 res/sec 15161
+--------------------------------
+
+total-sent/second:              4.0 GB
+total-received/second:          4.0 GB
+total-requests/second:          121301
+total-responses/second:         121288
+total-bytes-sent:               715.5 GB 
+total-bytes-received:           715.4 GB 
+total-requests-sent:            21834182 
+total-responses-received:       21831900

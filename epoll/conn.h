@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define BUFF_CAP 1024 * 128
+#define BUFF_CAP 1024 * 8
 
 typedef  struct {
   uint_fast64_t ctx;

@@ -1,0 +1,21 @@
+--------------------------------
+address: 127.0.0.1:9919	mode: stream	payload: 1.0 kB	duration: 3m0s	connections: 8
+Connection metrics:
+[Conn 1] sent: 55.9 GB, received: 55.9 GB, requests: 54571522, responses: 54563265 sent/sec: 310.5 MB recv/sec 310.4 MB req/sec: 303175 res/sec 303129
+[Conn 2] sent: 55.9 GB, received: 55.9 GB, requests: 54572137, responses: 54563249 sent/sec: 310.5 MB recv/sec 310.4 MB req/sec: 303178 res/sec 303129
+[Conn 3] sent: 55.9 GB, received: 55.9 GB, requests: 54572009, responses: 54563249 sent/sec: 310.5 MB recv/sec 310.4 MB req/sec: 303177 res/sec 303129
+[Conn 4] sent: 55.9 GB, received: 55.9 GB, requests: 54572599, responses: 54563265 sent/sec: 310.5 MB recv/sec 310.4 MB req/sec: 303181 res/sec 303129
+[Conn 5] sent: 55.9 GB, received: 55.9 GB, requests: 54572717, responses: 54563249 sent/sec: 310.5 MB recv/sec 310.4 MB req/sec: 303181 res/sec 303129
+[Conn 6] sent: 55.9 GB, received: 55.9 GB, requests: 54571109, responses: 54563249 sent/sec: 310.4 MB recv/sec 310.4 MB req/sec: 303172 res/sec 303129
+[Conn 7] sent: 55.9 GB, received: 55.9 GB, requests: 54572497, responses: 54563278 sent/sec: 310.5 MB recv/sec 310.4 MB req/sec: 303180 res/sec 303129
+[Conn 8] sent: 55.9 GB, received: 55.9 GB, requests: 54571995, responses: 54563233 sent/sec: 310.5 MB recv/sec 310.4 MB req/sec: 303177 res/sec 303129
+--------------------------------
+
+total-sent/second:              2.5 GB
+total-received/second:          2.5 GB
+total-requests/second:          2425425
+total-responses/second:         2425033
+total-bytes-sent:               447.1 GB 
+total-bytes-received:           447.0 GB 
+total-requests-sent:            436576585 
+total-responses-received:       436506043

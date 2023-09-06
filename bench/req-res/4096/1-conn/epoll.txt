@@ -1,0 +1,30 @@
+--------------------------------
+address: 127.0.0.1:9919	mode: req-res	payload: 4.1 kB	duration: 3m0s	connections: 1
+Connection metrics:
+[Conn 1] sent: 87.5 GB, received: 87.5 GB, requests: 21355067, responses: 21355067 sent/sec: 485.9 MB recv/sec 485.9 MB req/sec: 118639 res/sec 118639 avg-res-time: 8.397µs
+--------------------------------
+
+total-sent/second:              485.9 MB
+total-received/second:          485.9 MB
+total-requests/second:          118639
+total-responses/second:         118639
+total-bytes-sent:               87.5 GB 
+total-bytes-received:           87.5 GB 
+total-requests-sent:            21355067 
+total-responses-received:       21355067
+avg-response-time:           8.397µs
+--------------------------------
+address: 127.0.0.1:9919	mode: req-res	payload: 4.1 kB	duration: 3m0s	connections: 1
+Connection metrics:
+[Conn 1] sent: 86.7 GB, received: 86.7 GB, requests: 21163540, responses: 21163539 sent/sec: 481.6 MB recv/sec 481.6 MB req/sec: 117575 res/sec 117575 avg-res-time: 8.474µs
+--------------------------------
+
+total-sent/second:              481.6 MB
+total-received/second:          481.6 MB
+total-requests/second:          117575
+total-responses/second:         117575
+total-bytes-sent:               86.7 GB 
+total-bytes-received:           86.7 GB 
+total-requests-sent:            21163540 
+total-responses-received:       21163539
+avg-response-time:           8.474µs

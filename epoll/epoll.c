@@ -221,7 +221,6 @@ int main(int argc, char *argv[]) {
 
     int event_count = epoll_wait(epoll_fd, events, MAX_EVENTS, timeout);
     if (event_count < 0) {
-      // todo when and why would this fail and can we recover?
       perror("epoll_wait");
       return EXIT_FAILURE;
     }

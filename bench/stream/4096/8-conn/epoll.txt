@@ -1,0 +1,42 @@
+--------------------------------
+address: 127.0.0.1:9919	mode: stream	payload: 4.1 kB	duration: 3m0s	connections: 8
+Connection metrics:
+[Conn 1] sent: 82.5 GB, received: 82.5 GB, requests: 20139500, responses: 20137428 sent/sec: 458.3 MB recv/sec 458.2 MB req/sec: 111886 res/sec 111874
+[Conn 2] sent: 82.5 GB, received: 82.5 GB, requests: 20139491, responses: 20137428 sent/sec: 458.3 MB recv/sec 458.2 MB req/sec: 111886 res/sec 111874
+[Conn 3] sent: 82.5 GB, received: 82.5 GB, requests: 20139101, responses: 20137428 sent/sec: 458.3 MB recv/sec 458.2 MB req/sec: 111883 res/sec 111874
+[Conn 4] sent: 82.5 GB, received: 82.5 GB, requests: 20139340, responses: 20137436 sent/sec: 458.3 MB recv/sec 458.2 MB req/sec: 111885 res/sec 111874
+[Conn 5] sent: 82.5 GB, received: 82.5 GB, requests: 20139766, responses: 20137426 sent/sec: 458.3 MB recv/sec 458.2 MB req/sec: 111887 res/sec 111874
+[Conn 6] sent: 82.5 GB, received: 82.5 GB, requests: 20139628, responses: 20137394 sent/sec: 458.3 MB recv/sec 458.2 MB req/sec: 111886 res/sec 111874
+[Conn 7] sent: 82.5 GB, received: 82.5 GB, requests: 20138861, responses: 20137423 sent/sec: 458.3 MB recv/sec 458.2 MB req/sec: 111882 res/sec 111874
+[Conn 8] sent: 82.5 GB, received: 82.5 GB, requests: 20139196, responses: 20137423 sent/sec: 458.3 MB recv/sec 458.2 MB req/sec: 111884 res/sec 111874
+--------------------------------
+
+total-sent/second:              3.7 GB
+total-received/second:          3.7 GB
+total-requests/second:          895082
+total-responses/second:         894996
+total-bytes-sent:               659.9 GB 
+total-bytes-received:           659.9 GB 
+total-requests-sent:            161114883 
+total-responses-received:       161099393
+--------------------------------
+address: 127.0.0.1:9919	mode: stream	payload: 4.1 kB	duration: 3m0s	connections: 8
+Connection metrics:
+[Conn 1] sent: 82.3 GB, received: 82.3 GB, requests: 20100700, responses: 20098926 sent/sec: 457.4 MB recv/sec 457.4 MB req/sec: 111670 res/sec 111660
+[Conn 2] sent: 82.3 GB, received: 82.3 GB, requests: 20101371, responses: 20098924 sent/sec: 457.4 MB recv/sec 457.4 MB req/sec: 111674 res/sec 111660
+[Conn 3] sent: 82.3 GB, received: 82.3 GB, requests: 20100668, responses: 20098926 sent/sec: 457.4 MB recv/sec 457.4 MB req/sec: 111670 res/sec 111660
+[Conn 4] sent: 82.3 GB, received: 82.3 GB, requests: 20101067, responses: 20098926 sent/sec: 457.4 MB recv/sec 457.4 MB req/sec: 111672 res/sec 111660
+[Conn 5] sent: 82.3 GB, received: 82.3 GB, requests: 20100811, responses: 20098926 sent/sec: 457.4 MB recv/sec 457.4 MB req/sec: 111671 res/sec 111660
+[Conn 6] sent: 82.3 GB, received: 82.3 GB, requests: 20100940, responses: 20098911 sent/sec: 457.4 MB recv/sec 457.4 MB req/sec: 111671 res/sec 111660
+[Conn 7] sent: 82.3 GB, received: 82.3 GB, requests: 20100652, responses: 20098911 sent/sec: 457.4 MB recv/sec 457.4 MB req/sec: 111670 res/sec 111660
+[Conn 8] sent: 82.3 GB, received: 82.3 GB, requests: 20100993, responses: 20098918 sent/sec: 457.4 MB recv/sec 457.4 MB req/sec: 111672 res/sec 111660
+--------------------------------
+
+total-sent/second:              3.7 GB
+total-received/second:          3.7 GB
+total-requests/second:          893373
+total-responses/second:         893285
+total-bytes-sent:               658.7 GB 
+total-bytes-received:           658.6 GB 
+total-requests-sent:            160807202 
+total-responses-received:       160791375

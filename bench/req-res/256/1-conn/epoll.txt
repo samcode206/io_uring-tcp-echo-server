@@ -1,0 +1,15 @@
+--------------------------------
+address: 127.0.0.1:9919	mode: req-res	payload: 256 B	duration: 3m0s	connections: 1
+Connection metrics:
+[Conn 1] sent: 6.7 GB, received: 6.7 GB, requests: 26216219, responses: 26216218 sent/sec: 37.3 MB recv/sec 37.3 MB req/sec: 145645 res/sec 145645 avg-res-time: 6.834µs
+--------------------------------
+
+total-sent/second:              37.3 MB
+total-received/second:          37.3 MB
+total-requests/second:          145645
+total-responses/second:         145645
+total-bytes-sent:               6.7 GB 
+total-bytes-received:           6.7 GB 
+total-requests-sent:            26216219 
+total-responses-received:       26216218
+avg-response-time:           6.834µs

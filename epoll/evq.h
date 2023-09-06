@@ -7,8 +7,6 @@
 
 #define MAX_EVENTS 1024
 
-#define LIKELY(x) __builtin_expect(!!(x), 1)
-#define UNLIKELY(x) __builtin_expect(!!(x), 0)
 
 typedef struct {
   size_t ev_q_head;
@@ -42,6 +40,9 @@ static inline int evq_is_empty(evq_t *q) {
   }
   return 0;
 }
+
+#define LIKELY(x) __builtin_expect(!!(x), 1)
+#define UNLIKELY(x) __builtin_expect(!!(x), 0)
 
 static inline uint64_t evq_peek_evqe(evq_t *q) {
   if (LIKELY(evq_get_head(q) != evq_get_tail(q))) {

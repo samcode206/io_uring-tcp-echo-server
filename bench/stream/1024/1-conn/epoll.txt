@@ -1,0 +1,14 @@
+--------------------------------
+address: 127.0.0.1:9919	mode: stream	payload: 1.0 kB	duration: 3m0s	connections: 1
+Connection metrics:
+[Conn 1] sent: 135.3 GB, received: 135.2 GB, requests: 132082349, responses: 132067270 sent/sec: 751.4 MB recv/sec 751.3 MB req/sec: 733790 res/sec 733707
+--------------------------------
+
+total-sent/second:              751.4 MB
+total-received/second:          751.3 MB
+total-requests/second:          733790
+total-responses/second:         733707
+total-bytes-sent:               135.3 GB 
+total-bytes-received:           135.2 GB 
+total-requests-sent:            132082349 
+total-responses-received:       132067270
