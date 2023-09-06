@@ -17,7 +17,6 @@ typedef  struct {
 
 
 #define FD_MASK ((1ULL << 21) - 1)
-#define FD_SHIFT 0
 
 #define BUFF_OFFSET_MASK (((1ULL << 32) - 1) << 21)
 #define BUFF_OFFSET_SHIFT 21
@@ -26,9 +25,6 @@ typedef  struct {
 #define ECONN_WRITEABLE (1ULL << 55)
 
 #define CONN_QUEUED (1ULL << 56)
-
-#define MAX_ACCEPTABLE_FD 2097151
-#define MAX_INDEXABLE_BUFF_OFFSET 4294967295
 
 static inline uint32_t conn_ctx_get_fd(conn_t *conn) {
   return conn->ctx & FD_MASK;
@@ -85,5 +81,5 @@ static inline void conn_clear(conn_t *conn){
   memset(conn, 0, sizeof(*conn) - offsetof(conn_t, buf));
 }
 
-#endif
+#endif /* __CONN_CTX_CLT */
 

@@ -25,8 +25,7 @@ typedef struct {
   evq_t evq;
 } server_t;
 
-int server_handle_conn(server_t *server, conn_t *conn, int epoll_fd,
-                       struct epoll_event *ev);
+int handle_conn(conn_t *conn, int epoll_fd, struct epoll_event *ev);
 
 static void evq_proccess_events(server_t *server, int epollfd,
                                 struct epoll_event *ev) {
@@ -46,7 +45,7 @@ static void evq_proccess_events(server_t *server, int epollfd,
         continue;
       }
 
-      int ret = server_handle_conn(server, conn, epollfd, ev);
+      int ret = handle_conn(conn, epollfd, ev);
       if (ret) {
         server_evq_readd_evqe(&server->evq);
       } else if (ret == -1) {
@@ -63,16 +62,16 @@ static void evq_proccess_events(server_t *server, int epollfd,
   }
 }
 
-int server_handle_conn(server_t *server, conn_t *conn, int epoll_fd,
-                       struct epoll_event *ev) {
+int handle_conn(conn_t *conn, int epoll_fd, struct epoll_event *ev) {
   int fd = conn_ctx_get_fd(conn);
   int readable = conn_readable(conn, BUFF_CAP);
   int writeable = conn_writeable(conn);
   int count;
   int ret = 0;
   int ok = 0;
+  #define MAX_LOOPS 4
 
-  for (count = 0; count < 4; ++count) {
+  for (count = 0; count < MAX_LOOPS; ++count) {
     if (writeable) {
       ret = send(fd, conn->buf, conn_ctx_get_buff_offset(conn), 0);
       ok = ret > 0;
@@ -153,7 +152,6 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
-  // set up socket
   int server_fd =
       socket(servinfo->ai_family, servinfo->ai_socktype, servinfo->ai_protocol);
   if (server_fd < 0) {
@@ -161,7 +159,6 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
-  // make socket non blocking
   int curr_flags = fcntl(server_fd, F_GETFL, 0);
   if (curr_flags < 0) {
     perror("fcntl");
@@ -177,13 +174,11 @@ int main(int argc, char *argv[]) {
   assert(setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(int)) ==
          0);
 
-  // bind socket
   if (bind(server_fd, servinfo->ai_addr, servinfo->ai_addrlen) < 0) {
     perror("bind");
     return EXIT_FAILURE;
   };
 
-  // listen for connections
   if (listen(server_fd, LISTEN_BACKLOG) < 0) {
     perror("listen");
     return EXIT_FAILURE;
@@ -228,7 +223,6 @@ int main(int argc, char *argv[]) {
     // loop over events
     for (int i = 0; i < event_count; ++i) {
       if (events[i].data.fd == server_fd) {
-        // new clients are coming in spin accepting all connections
         for (;;) {
           int client_fd =
               accept4(server_fd, (struct sockaddr *)&client_sockaddr,
@@ -251,7 +245,6 @@ int main(int argc, char *argv[]) {
           conn_ctx_set_ev(&server->conns[client_fd],
                           ECONN_READABLE | ECONN_WRITEABLE);
 
-          // add to epoll struct with events
           ev.events = EPOLLIN | EPOLLRDHUP | EPOLLET;
           ev.data.fd = client_fd;
           assert(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, &ev) == 0);
@@ -281,7 +274,7 @@ int main(int argc, char *argv[]) {
           }
 
           if (!conn_ctx_check_ev(conn, CONN_QUEUED)) {
-            int ret = server_handle_conn(server, conn, epoll_fd, &ev);
+            int ret = handle_conn(conn, epoll_fd, &ev);
             if (ret == -1) {
               ev.data.fd = fd;
               assert(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, &ev) == 0);
