@@ -201,7 +201,7 @@ int server_socket_bind_listen(int port, int sockopts) {
   memset(&srv_addr, 0, sizeof(srv_addr));
   srv_addr.sin_family = AF_INET;
   srv_addr.sin_port = htons(port);
-  srv_addr.sin_addr.s_addr = htons(INADDR_ANY); /* 0.0.0.0 */
+  srv_addr.sin_addr.s_addr = htons(INADDR_ANY);
 
   assert(bind(fd, (const struct sockaddr *)&srv_addr, sizeof(srv_addr)) >= 0);
   assert(listen(fd, LISTEN_BACKLOG) >= 0);

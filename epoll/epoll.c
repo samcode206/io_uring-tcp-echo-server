@@ -18,7 +18,7 @@
 #include <unistd.h>
 
 #define LISTEN_BACKLOG 1024
-#define DEFAULT_PORT "9919"
+#define DEFAULT_PORT 9919
 
 typedef struct {
   conn_t conns[MAX_EVENTS];
@@ -69,7 +69,7 @@ int handle_conn(conn_t *conn, int epoll_fd, struct epoll_event *ev) {
   int count;
   int ret = 0;
   int ok = 0;
-  #define MAX_LOOPS 4
+#define MAX_LOOPS 4
 
   for (count = 0; count < MAX_LOOPS; ++count) {
     if (writeable) {
@@ -126,7 +126,7 @@ int handle_conn(conn_t *conn, int epoll_fd, struct epoll_event *ev) {
   return 1;
 }
 
-int main(int argc, char *argv[]) {
+int main(void) {
 
   signal(SIGPIPE, SIG_IGN);
 
@@ -134,57 +134,31 @@ int main(int argc, char *argv[]) {
                           MAP_ANON | MAP_PRIVATE | MAP_POPULATE, -1, 0);
   assert(server != MAP_FAILED);
 
-  char *port = DEFAULT_PORT;
-  if (argc > 1) {
-    port = argv[1];
-  }
+  int server_fd;
+  struct sockaddr_in srv_addr;
 
-  // set up addr info
-  struct addrinfo hints;
-  struct addrinfo *servinfo;
-  memset(&hints, 0, sizeof hints);
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-  hints.ai_flags = AI_PASSIVE;
-
-  if (getaddrinfo(NULL, port, &hints, &servinfo) < 0) {
-    perror("getaddrinfo");
-    return EXIT_FAILURE;
-  }
-
-  int server_fd =
-      socket(servinfo->ai_family, servinfo->ai_socktype, servinfo->ai_protocol);
-  if (server_fd < 0) {
-    perror("socket");
-    return EXIT_FAILURE;
-  }
-
-  int curr_flags = fcntl(server_fd, F_GETFL, 0);
-  if (curr_flags < 0) {
-    perror("fcntl");
-    return EXIT_FAILURE;
-  }
-
-  if (fcntl(server_fd, F_SETFL, curr_flags | O_NONBLOCK) < 0) {
-    perror("fcntl");
-    return EXIT_FAILURE;
-  }
+  server_fd = socket(PF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
 
   int on = 1;
-  assert(setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(int)) ==
-         0);
+  setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(int));
+  memset(&srv_addr, 0, sizeof(srv_addr));
+  srv_addr.sin_family = AF_INET;
+  srv_addr.sin_port = htons(DEFAULT_PORT);
+  srv_addr.sin_addr.s_addr = htons(INADDR_ANY);
 
-  if (bind(server_fd, servinfo->ai_addr, servinfo->ai_addrlen) < 0) {
+  if (bind(server_fd, (const struct sockaddr *)&srv_addr, sizeof(srv_addr))) {
     perror("bind");
-    return EXIT_FAILURE;
-  };
-
-  if (listen(server_fd, LISTEN_BACKLOG) < 0) {
-    perror("listen");
-    return EXIT_FAILURE;
+    exit(1);
   }
 
-  printf("listening on port:%s\n", port);
+  assert(listen(server_fd, LISTEN_BACKLOG) >= 0);
+
+  if (listen(server_fd, LISTEN_BACKLOG)) {
+    perror("listen");
+    exit(1);
+  }
+
+  printf("listening on port:%d\n", DEFAULT_PORT);
 
   // set up epoll
   int epoll_fd = epoll_create1(0);
@@ -293,7 +267,6 @@ int main(int argc, char *argv[]) {
   }
 
   // end of event loop
-  freeaddrinfo(servinfo);
   close(epoll_fd);
   close(server_fd);
   munmap(server, sizeof *server);
