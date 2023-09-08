@@ -66,17 +66,16 @@ static inline void conn_buf_offset_dec(conn_t *conn, int d) {
   conn->buf_offset -= d;
 }
 
-static inline void conn_clear(conn_t *conn) { memset(conn, 0, 8); }
-
 typedef struct {
   conn_t conns[MAX_EVENTS];
 } server_t;
 
 int handle_conn(conn_t *conn, int fd, int epoll_fd, struct epoll_event *ev,
                 int read) {
-  int can_read = 1;
-  int readable = can_read & read & conn_readable(conn);
-  int writeable = conn_writeable(conn);
+  int can_read = 1 & read;
+  int can_write = 1;
+  int readable = can_read & conn_readable(conn);
+  int writeable = can_write & conn_writeable(conn);
   int count;
   int ret = 0;
   int ok = 0;
@@ -90,6 +89,8 @@ int handle_conn(conn_t *conn, int fd, int epoll_fd, struct epoll_event *ev,
 
       if (!ok) {
         if (ret == -1 && (errno == EWOULDBLOCK || errno == EAGAIN)) {
+          // printf("paused reading1: %d\n", fd);
+          can_write = 0;
           ev->data.fd = fd;
           ev->events = EPOLLOUT | EPOLLRDHUP;
           assert(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, ev) == 0);
@@ -99,14 +100,16 @@ int handle_conn(conn_t *conn, int fd, int epoll_fd, struct epoll_event *ev,
       }
 
       // don't try writing, it will EAGAIN
-      if (conn_buf_get_offset(conn)) {
+      if (ok & (conn_buf_get_offset(conn) > 0)) {
+        // printf("paused reading2: %d\n", fd);
+        can_write = 0;
         ev->data.fd = fd;
         ev->events = EPOLLOUT | EPOLLRDHUP;
         assert(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, ev) == 0);
       }
     };
 
-    readable = can_read & read & conn_readable(conn);
+    readable = can_read  & conn_readable(conn);
 
     if (readable) {
       ret = recv(fd, conn->buf + conn_buf_get_offset(conn),
@@ -128,7 +131,7 @@ int handle_conn(conn_t *conn, int fd, int epoll_fd, struct epoll_event *ev,
       }
     }
 
-    writeable = conn_writeable(conn);
+    writeable = can_write & conn_writeable(conn);
 
     if (!(readable || writeable)) {
       return 0;
@@ -193,7 +196,6 @@ int main(void) {
   socklen_t client_socklen;
   client_socklen = sizeof client_sockaddr;
 
-
   for (;;) {
 
     int event_count = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
@@ -239,10 +241,9 @@ int main(void) {
           ev.data.fd = fd;
           assert(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, &ev) == 0);
           assert(close(fd) == 0);
-          conn_clear(conn);
         } else {
           if (events[i].events & EPOLLOUT) {
-            printf("continue reading: %d\n", fd);
+            // printf("continue reading: %d\n", fd);
             ev.data.fd = fd;
             ev.events = EPOLLIN | EPOLLRDHUP;
             assert(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, &ev) == 0);
@@ -258,7 +259,6 @@ int main(void) {
             ev.data.fd = fd;
             assert(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, &ev) == 0);
             assert(close(fd) == 0);
-            conn_clear(conn);
           }
         }
       }
