@@ -1,12 +1,33 @@
+/*
+MIT License
+
+Copyright (c) 2023 Sam, H
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+*/
 #define _GNU_SOURCE
-#include "conn.h"
-#include "evq.h"
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
-#include <stdbool.h>
-#include <stdint.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,194 +35,63 @@
 #include <sys/mman.h>
 #include <sys/signal.h>
 #include <sys/socket.h>
-#include <sys/types.h>
-#include <unistd.h>
 
-#define LISTEN_BACKLOG 1024
 #define DEFAULT_PORT 9919
+#define LISTEN_BACKLOG (1 << 12) /* 4k */
+#define MAX_EVENTS 1024 * 10     /* upto 10240 events */
+#define BUF_SIZE (1 << 13)       /* 8kb */
 
 typedef struct {
-  conn_t conns[MAX_EVENTS];
-  evq_t evq;
+  struct epoll_event events[MAX_EVENTS]; /* event list */
+  struct epoll_event ev;                 /* ctl mod event */
+  int epoll_fd;
+  unsigned char sbuf[BUF_SIZE];                      /* hot buffer */
+  unsigned char conn_bufs[MAX_EVENTS - 4][BUF_SIZE]; /* connection specific
+                                                        buffers (slow path) */
 } server_t;
 
-int handle_conn(conn_t *conn, int epoll_fd, struct epoll_event *ev);
+server_t *server_init(int server_fd);
+void server_shutdown(server_t *s, int sfd);
+int socket_bind_listen(uint16_t port, uint16_t addr, int backlog);
 
-static void evq_proccess_events(server_t *server, int epollfd,
-                                struct epoll_event *ev) {
-  size_t ev_count = MAX_EVENTS - evq_get_space(&server->evq) - 1;
+typedef uint64_t event_ctx_t;
 
-  conn_t *conn;
-  int fd;
+static inline int ev_ctx_get_fd(event_ctx_t ctx);
+static inline event_ctx_t ev_ctx_set_fd(event_ctx_t ctx, int fd);
+static inline uint32_t ev_ctx_get_buf_offset(event_ctx_t ctx);
+static inline event_ctx_t ev_ctx_set_buf_offset(event_ctx_t ctx,
+                                                uint32_t offset);
 
-  while (ev_count-- > 0) {
-    conn = (conn_t *)evq_peek_evqe(&server->evq);
-    if (conn == 0) {
-      evq_delete_evqe(&server->evq);
-    } else {
-      fd = (int)conn_ctx_get_fd(conn);
-      if (!fd) {
-        evq_delete_evqe(&server->evq);
-        continue;
-      }
+int handle_conn(server_t *s, event_ctx_t ctx, int nops);
 
-      int ret = handle_conn(conn, epollfd, ev);
-      if (ret) {
-        server_evq_readd_evqe(&server->evq);
-      } else if (ret == -1) {
-        conn_clear(conn);
-        ev->data.fd = fd;
-        assert(epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, ev) == 0);
-        assert(close(fd) == 0);
-        evq_delete_evqe(&server->evq);
-      } else {
-        conn_ctx_unset_ev(conn, CONN_QUEUED);
-        evq_delete_evqe(&server->evq);
-      }
-    }
-  }
-}
-
-int handle_conn(conn_t *conn, int epoll_fd, struct epoll_event *ev) {
-  int fd = conn_ctx_get_fd(conn);
-  int readable = conn_readable(conn, BUFF_CAP);
-  int writeable = conn_writeable(conn);
-  int count;
-  int ret = 0;
-  int ok = 0;
-#define MAX_LOOPS 4
-
-  for (count = 0; count < MAX_LOOPS; ++count) {
-    if (writeable) {
-      ret = send(fd, conn->buf, conn_ctx_get_buff_offset(conn), 0);
-      ok = ret > 0;
-      conn_ctx_dec_buff_offset(conn, (ok * ret));
-
-      if (!ok) {
-        if (ret == -1 && (errno == EWOULDBLOCK || errno == EAGAIN)) {
-          // perror("send()");
-          conn_ctx_unset_ev(conn, ECONN_WRITEABLE);
-          ev->data.fd = fd;
-          ev->events = EPOLLOUT | EPOLLRDHUP | EPOLLET;
-          assert(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, ev) == 0);
-        } else {
-          return -1;
-        }
-      }
-
-      // don't try writing, it will EAGAIN
-      if (conn_ctx_get_buff_offset(conn)) {
-        conn_ctx_unset_ev(conn, ECONN_WRITEABLE);
-        ev->data.fd = fd;
-        ev->events = EPOLLOUT | EPOLLRDHUP | EPOLLET;
-        assert(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, ev) == 0);
-      }
-    };
-
-    readable = conn_readable(conn, BUFF_CAP);
-
-    if (readable) {
-      ret = recv(fd, conn->buf + conn_ctx_get_buff_offset(conn),
-                 BUFF_CAP - conn_ctx_get_buff_offset(conn), 0);
-      ok = (ret > 0);
-      conn_ctx_inc_buff_offset(conn, (ok * ret));
-
-      if (!ok) {
-        if (ret == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-          // perror("recv()");
-          conn_ctx_unset_ev(conn, ECONN_READABLE);
-        } else {
-          return -1;
-        }
-      }
-    }
-
-    writeable = conn_writeable(conn);
-
-    if (!(readable || writeable)) {
-      return 0;
-    };
-  }
-
-  return 1;
-}
+static int conn_buf_drain(server_t *s, event_ctx_t ctx, int nops);
 
 int main(void) {
-
+  printf("pid: %d\n", getpid());
   signal(SIGPIPE, SIG_IGN);
-
-  server_t *server = mmap(NULL, sizeof *server, PROT_READ | PROT_WRITE,
-                          MAP_ANON | MAP_PRIVATE | MAP_POPULATE, -1, 0);
-  assert(server != MAP_FAILED);
-
-  int server_fd;
-  struct sockaddr_in srv_addr;
-
-  server_fd = socket(PF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
-
-  int on = 1;
-  setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(int));
-  memset(&srv_addr, 0, sizeof(srv_addr));
-  srv_addr.sin_family = AF_INET;
-  srv_addr.sin_port = htons(DEFAULT_PORT);
-  srv_addr.sin_addr.s_addr = htons(INADDR_ANY);
-
-  if (bind(server_fd, (const struct sockaddr *)&srv_addr, sizeof(srv_addr))) {
-    perror("bind");
-    exit(1);
-  }
-
-  assert(listen(server_fd, LISTEN_BACKLOG) >= 0);
-
-  if (listen(server_fd, LISTEN_BACKLOG)) {
-    perror("listen");
-    exit(1);
-  }
-
-  printf("listening on port:%d\n", DEFAULT_PORT);
-
-  // set up epoll
-  int epoll_fd = epoll_create1(0);
-  if (epoll_fd < 0) {
-    perror("epoll_create1");
-    return EXIT_FAILURE;
-  }
-
-  struct epoll_event ev;
-  ev.events = EPOLLIN;
-  ev.data.fd = server_fd;
-
-  if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, server_fd, &ev) < 0) {
-    perror("epoll_ctl");
-    return EXIT_FAILURE;
-  };
-
-  struct epoll_event events[MAX_EVENTS];
   struct sockaddr_storage client_sockaddr;
   socklen_t client_socklen;
   client_socklen = sizeof client_sockaddr;
 
-  // start of event loop
-  for (;;) {
-    int timeout = 0;
-    if (evq_is_empty(&server->evq)) {
-      timeout = -1;
-    };
+  int server_fd = socket_bind_listen(DEFAULT_PORT, INADDR_ANY, LISTEN_BACKLOG);
+  server_t *server = server_init(server_fd);
 
-    int event_count = epoll_wait(epoll_fd, events, MAX_EVENTS, timeout);
-    if (event_count < 0) {
+  for (;;) {
+
+    int n_evs = epoll_wait(server->epoll_fd, server->events, MAX_EVENTS, -1);
+    if (n_evs < 0) {
       perror("epoll_wait");
       return EXIT_FAILURE;
     }
 
     // loop over events
-    for (int i = 0; i < event_count; ++i) {
-      if (events[i].data.fd == server_fd) {
+    for (int i = 0; i < n_evs; ++i) {
+      if (ev_ctx_get_fd(server->events[i].data.u64) == server_fd) {
         for (;;) {
           int client_fd =
               accept4(server_fd, (struct sockaddr *)&client_sockaddr,
                       &client_socklen, O_NONBLOCK);
-          if (client_fd < 0) {
+          if ((client_fd < 0)) {
             if (!(errno == EAGAIN)) {
               perror("accept");
             }
@@ -214,62 +104,215 @@ int main(void) {
             continue;
           }
 
-          assert(server->conns[client_fd].ctx == 0);
-          conn_ctx_set_fd(&server->conns[client_fd], client_fd);
-          conn_ctx_set_ev(&server->conns[client_fd],
-                          ECONN_READABLE | ECONN_WRITEABLE);
+          server->ev.events = EPOLLIN | EPOLLRDHUP;
+          server->ev.data.u64 = ev_ctx_set_fd(0, client_fd);
 
-          ev.events = EPOLLIN | EPOLLRDHUP | EPOLLET;
-          ev.data.fd = client_fd;
-          assert(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, &ev) == 0);
+          assert(epoll_ctl(server->epoll_fd, EPOLL_CTL_ADD, client_fd,
+                           &server->ev) == 0);
         }
 
       } else {
-        int fd = events[i].data.fd;
-        // printf("servicing: %d\n", fd);
-        conn_t *conn = &server->conns[fd];
-        // handle closure
-        if (events[i].events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR)) {
-          // printf("closing: %d\n", fd);
-          ev.data.fd = fd;
-          assert(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, &ev) == 0);
+        if (server->events[i].events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR)) {
+          int fd = ev_ctx_get_fd(server->events[i].data.u64);
+          assert(epoll_ctl(server->epoll_fd, EPOLL_CTL_DEL, fd, &server->ev) ==
+                 0);
           assert(close(fd) == 0);
-          conn_clear(conn);
         } else {
-          if (events[i].events & EPOLLOUT) {
-            conn_ctx_set_ev(conn, ECONN_WRITEABLE);
-            ev.data.fd = fd;
-            ev.events = EPOLLIN | EPOLLRDHUP | EPOLLET;
-            assert(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, &ev) == 0);
-          }
-
-          if (events[i].events & EPOLLIN) {
-            conn_ctx_set_ev(conn, ECONN_READABLE);
-          }
-
-          if (!conn_ctx_check_ev(conn, CONN_QUEUED)) {
-            int ret = handle_conn(conn, epoll_fd, &ev);
+          if (server->events[i].events & EPOLLOUT) {
+            int ret = conn_buf_drain(server, server->events[i].data.u64, 8);
             if (ret == -1) {
-              ev.data.fd = fd;
-              assert(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, &ev) == 0);
+              int fd = ev_ctx_get_fd(server->events[i].data.u64);
+              assert(epoll_ctl(server->epoll_fd, EPOLL_CTL_DEL, fd,
+                               &server->ev) == 0);
               assert(close(fd) == 0);
-              conn_clear(conn);
-            } else if (ret) {
-              conn_ctx_set_ev(conn, CONN_QUEUED);
-              evq_add_evqe(&server->evq, (uint64_t)conn);
-            };
+            }
+
+          } else if (server->events[i].events & EPOLLIN) {
+            int ret = handle_conn(server, server->events[i].data.u64, 8);
+            if (ret == -1) {
+              int fd = ev_ctx_get_fd(server->events[i].data.u64);
+              // ev.data.fd = fd;
+              assert(epoll_ctl(server->epoll_fd, EPOLL_CTL_DEL, fd,
+                               &server->ev) == 0);
+              assert(close(fd) == 0);
+            }
           }
         }
       }
     }
-
-    evq_proccess_events(server, epoll_fd, &ev);
   }
 
-  // end of event loop
-  close(epoll_fd);
-  close(server_fd);
-  munmap(server, sizeof *server);
+  server_shutdown(server, server_fd);
 
   return EXIT_SUCCESS;
+}
+
+server_t *server_init(int server_fd) {
+  // create a vm mapping, and mlock the hot portion of the server (back it up by
+  // RAM and keep it there) the connection specific buffers will page fault on a
+  // per needed bases (slow path buffers)
+  server_t *server = mmap(NULL, sizeof *server, PROT_READ | PROT_WRITE,
+                          MAP_ANON | MAP_PRIVATE, -1, 0);
+  assert(server != MAP_FAILED);
+  if (mlock2(server, offsetof(server_t, conn_bufs), 0) != 0) {
+    fprintf(stdout, "[warning]: mlock failed %s\n", strerror(errno));
+    errno = 0;
+  };
+
+  printf("listening on port:%d\n", DEFAULT_PORT);
+
+  // set up epoll
+  int epoll_fd = epoll_create1(0);
+  if (epoll_fd < 0) {
+    perror("epoll_create1");
+    exit(EXIT_FAILURE);
+  }
+  server->epoll_fd = epoll_fd;
+
+  server->ev.events = EPOLLIN;
+  server->ev.data.u64 = ev_ctx_set_fd(0, server_fd);
+
+  if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, server_fd, &server->ev) < 0) {
+    perror("epoll_ctl");
+    exit(EXIT_FAILURE);
+  };
+
+  return server;
+}
+
+int socket_bind_listen(uint16_t port, uint16_t addr, int backlog) {
+  int server_fd;
+  struct sockaddr_in srv_addr;
+  int ret;
+
+  server_fd = socket(PF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+  if (server_fd < 0) {
+    return server_fd;
+  }
+
+  int on = 1;
+  ret = setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(int));
+  if (ret < 0) {
+    return ret;
+  }
+
+  memset(&srv_addr, 0, sizeof(srv_addr));
+  srv_addr.sin_family = AF_INET;
+  srv_addr.sin_port = htons(port);
+  srv_addr.sin_addr.s_addr = htons(addr);
+
+  ret = bind(server_fd, (const struct sockaddr *)&srv_addr, sizeof(srv_addr));
+  if (ret < 0) {
+    return ret;
+  }
+
+  ret = listen(server_fd, backlog);
+  if (listen(server_fd, backlog)) {
+    perror("listen");
+    exit(1);
+  }
+
+  return server_fd;
+}
+
+void server_shutdown(server_t *s, int sfd) {
+  // end of event loop
+  close(s->epoll_fd);
+  close(sfd);
+  munlockall();
+  munmap(s, sizeof *s);
+}
+
+#define would_block(n) (n == -1) & ((errno == EAGAIN) | (errno == EWOULDBLOCK))
+
+int handle_conn(server_t *s, event_ctx_t ctx, int nops) {
+  // check if the ctx has an offset greater than 0
+  // if it does attempt to drain from the conn_bufs[fd]
+  int fd = ev_ctx_get_fd(ctx);
+  uint32_t offset = ev_ctx_get_buf_offset(ctx);
+  assert(!offset); // TODO remove
+  ssize_t n = 0;
+
+  while (nops-- > 0) {
+    if ((BUF_SIZE - offset) > 0) {
+      n = recv(fd, s->sbuf + offset, BUF_SIZE - offset, 0);
+      offset += (n > 0) * n;
+      if (would_block(n)) {
+        break;
+      } else if ((n == -1) | (n == 0)) {
+        return -1;
+      }
+    }
+
+    ssize_t wi = 0;
+    while ((wi < offset) && (nops-- > 0)) {
+      n = send(fd, s->sbuf + wi, offset - wi, 0);
+      wi += (n > 0) * n;
+      if (would_block(n)) {
+        break;
+      } else if ((n == 0) | (n == -1)) {
+        return -1;
+      }
+    }
+
+    if (wi < offset) {
+      memcpy(s->conn_bufs[fd], s->sbuf + wi, offset - wi);
+      s->ev.data.u64 = ev_ctx_set_buf_offset(ctx, offset - wi);
+      s->ev.events = EPOLLOUT | EPOLLRDHUP | EPOLLONESHOT;
+      assert(epoll_ctl(s->epoll_fd, EPOLL_CTL_MOD, fd, &s->ev) == 0);
+      return 0;
+    } else {
+      offset = 0;
+    }
+  }
+
+  return 0;
+}
+
+static int conn_buf_drain(server_t *s, event_ctx_t ctx, int nops) {
+  int fd = ev_ctx_get_fd(ctx);
+  uint32_t offset = ev_ctx_get_buf_offset(ctx);
+
+  ssize_t n;
+  ssize_t wi = 0;
+  while ((wi < offset) & (nops-- > 0)) {
+    assert((offset - wi) <= BUF_SIZE);
+    n = send(fd, s->conn_bufs[fd] + wi, offset - wi, 0);
+    wi += (n > 0) * n;
+    if (would_block(n)) {
+      break;
+    } else if ((n == 0) | (n == -1)) {
+      return -1;
+    }
+  }
+
+  if (wi < offset) {
+    memcpy(s->conn_bufs[fd], s->conn_bufs[fd] + wi, offset - wi);
+    s->ev.data.u64 = ev_ctx_set_buf_offset(ctx, offset - wi);
+    s->ev.events = EPOLLOUT | EPOLLRDHUP | EPOLLONESHOT;
+    assert(epoll_ctl(s->epoll_fd, EPOLL_CTL_MOD, fd, &s->ev) == 0);
+  } else {
+    s->ev.events = EPOLLIN | EPOLLRDHUP;
+    s->ev.data.u64 = ev_ctx_set_buf_offset(ctx, 0);
+    assert(epoll_ctl(s->epoll_fd, EPOLL_CTL_MOD, fd, &s->ev) == 0);
+  }
+
+  return 0;
+}
+
+static inline int ev_ctx_get_fd(event_ctx_t ctx) {
+  return ctx & ((1ULL << 32) - 1);
+}
+
+static inline event_ctx_t ev_ctx_set_fd(event_ctx_t ctx, int fd) {
+  return (ctx & ~((1ULL << 32) - 1)) | (event_ctx_t)fd;
+}
+
+static inline uint32_t ev_ctx_get_buf_offset(event_ctx_t ctx) {
+  return (ctx >> 32) & ((1ULL << 32) - 1);
+}
+
+static inline event_ctx_t ev_ctx_set_buf_offset(event_ctx_t ctx,
+                                                uint32_t offset) {
+  return (ctx & ~(((1ULL << 32) - 1) << 32)) | ((event_ctx_t)offset << 32);
 }
