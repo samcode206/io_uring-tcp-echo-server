@@ -22,21 +22,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 */
-#include "conn.h"
 #include <assert.h>
-#include <ctype.h>
-#include <fcntl.h>
 #include <liburing.h>
-#include <liburing/io_uring.h>
 #include <netinet/in.h>
 #include <signal.h>
-#include <stddef.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
-#include <sys/stat.h>
 #include <unistd.h>
 
 #define FD_COUNT 1024
@@ -61,7 +54,7 @@ static_assert(!(BG_ENTRIES & (BG_ENTRIES - 1)),
 static_assert(!(SQ_DEPTH & (SQ_DEPTH - 1)), "SQ_DEPTH must be a power of two");
 
 typedef struct server_t server_t;
-typedef void (*io_event_cb)(server_t *s, uint_fast64_t ctx,
+typedef void (*io_event_cb)(server_t *s, uint64_t ctx,
                             struct io_uring_cqe *cqe);
 
 struct server_t {
@@ -78,19 +71,19 @@ static void server_add_multishot_accept(server_t *s, int listener_fd);
 
 static void server_add_recv(server_t *s, int fd);
 
-static inline void server_add_send(server_t *s, uint_fast64_t *ctx,
+static inline void server_add_send(server_t *s, uint64_t *ctx,
                                    const void *data, size_t len,
                                    uint32_t sqe_flags, uint32_t send_flags);
 
 static void server_add_close_direct(server_t *s, uint32_t fd);
 
-static void on_accept(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe);
+static void on_accept(server_t *s, uint64_t ctx, struct io_uring_cqe *cqe);
 
-static void on_read(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe);
+static void on_read(server_t *s, uint64_t ctx, struct io_uring_cqe *cqe);
 
-static void on_write(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe);
+static void on_write(server_t *s, uint64_t ctx, struct io_uring_cqe *cqe);
 
-static void on_close(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe);
+static void on_close(server_t *s, uint64_t ctx, struct io_uring_cqe *cqe);
 
 static inline unsigned char *server_get_selected_buffer(server_t *s,
                                                         uint32_t buf_idx);
@@ -101,6 +94,16 @@ static inline void server_recycle_buff(server_t *s, void *buf,
                                        uint32_t buf_idx);
 
 struct io_uring_sqe *must_get_sqe(server_t *s);
+
+
+static inline void conn_set_fd(uint64_t *data, uint32_t fd);
+static inline void conn_set_bgid(uint64_t *data, uint32_t index);
+static inline void conn_set_buf_idx(uint64_t *data, uint32_t index);
+static inline void conn_set_event(uint64_t *data, uint8_t event);
+static inline uint32_t conn_get_fd(uint64_t data);
+static inline uint32_t conn_get_bgid(uint64_t data);
+static inline uint32_t conn_get_buf_idx(uint64_t data);
+static inline uint8_t conn_get_event(uint64_t data);
 
 // ---------------------------------------------------------------------
 
@@ -266,7 +269,7 @@ static void server_add_recv(server_t *s, int fd) {
   sqe->buf_group = server_conn_get_bgid(s);
 }
 
-static inline void server_add_send(server_t *s, uint_fast64_t *ctx,
+static inline void server_add_send(server_t *s, uint64_t *ctx,
                                    const void *data, size_t len,
                                    uint32_t sqe_flags, uint32_t send_flags) {
   int fd = conn_get_fd(*ctx);
@@ -291,7 +294,7 @@ static void server_add_close_direct(server_t *s, uint32_t fd) {
   io_uring_sqe_set_data64(sqe, close_ctx);
 }
 
-static void on_accept(server_t *s, uint_fast64_t ctx,
+static void on_accept(server_t *s, uint64_t ctx,
                       struct io_uring_cqe *cqe) {
   if (UNLIKELY(cqe->res < 0)) {
     printf("accept error: %d exiting...\n", cqe->res);
@@ -300,7 +303,7 @@ static void on_accept(server_t *s, uint_fast64_t ctx,
   server_add_recv(s, cqe->res);
 }
 
-static void on_read(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe) {
+static void on_read(server_t *s, uint64_t ctx, struct io_uring_cqe *cqe) {
   if (UNLIKELY(cqe->res <= 0)) {
     if (cqe->res == -ENOBUFS) {
       fprintf(stderr, "ran out of buffers exiting program...\n");
@@ -318,7 +321,7 @@ static void on_read(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe) {
   }
 }
 
-static void on_write(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe) {
+static void on_write(server_t *s, uint64_t ctx, struct io_uring_cqe *cqe) {
   uint32_t buf_idx = conn_get_buf_idx(ctx);
   //   printf("buffer-group: %d\tbuffer-id: %d\n", bgid, buf_idx);
   unsigned char *buf = server_get_selected_buffer(s, buf_idx);
@@ -332,8 +335,50 @@ static void on_write(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe) {
   server_recycle_buff(s, buf, buf_idx);
 }
 
-static void on_close(server_t *s, uint_fast64_t ctx, struct io_uring_cqe *cqe) {
+static void on_close(server_t *s, uint64_t ctx, struct io_uring_cqe *cqe) {
   if (cqe->res < 0) {
     fprintf(stderr, "close: %s\n", strerror(-cqe->res));
   }
+}
+
+
+#define FD_MASK ((1ULL << 21) - 1)
+#define BGID_SHIFT 21
+#define BGID_MASK (((1ULL << 15) - 1) << BGID_SHIFT)
+
+#define EVENT_SHIFT 36
+#define EVENT_MASK (3ULL << EVENT_SHIFT)
+
+#define BUFIDX_SHIFT 39
+#define BUFIDX_MASK (((1ULL << 16) - 1) << BUFIDX_SHIFT)
+
+
+static inline void conn_set_fd(uint64_t *data, uint32_t fd) {
+  *data = (*data & ~FD_MASK) | (uint64_t)fd;
+}
+
+static inline void conn_set_bgid(uint64_t *data, uint32_t index) {
+  *data = (*data & ~BGID_MASK) | ((uint64_t)index << BGID_SHIFT);
+}
+
+static inline void conn_set_buf_idx(uint64_t *data, uint32_t index) {
+  *data = (*data & ~BUFIDX_MASK) | ((uint64_t)index << BUFIDX_SHIFT);
+}
+
+static inline void conn_set_event(uint64_t *data, uint8_t event) {
+  *data = (*data & ~EVENT_MASK) | ((uint64_t)event << EVENT_SHIFT);
+}
+
+static inline uint32_t conn_get_fd(uint64_t data) { return (data & FD_MASK); }
+
+static inline uint32_t conn_get_bgid(uint64_t data) {
+  return (data & BGID_MASK) >> BGID_SHIFT;
+}
+
+static inline uint32_t conn_get_buf_idx(uint64_t data) {
+  return (data & BUFIDX_MASK) >> BUFIDX_SHIFT;
+}
+
+static inline uint8_t conn_get_event(uint64_t data) {
+  return (data & EVENT_MASK) >> EVENT_SHIFT;
 }
