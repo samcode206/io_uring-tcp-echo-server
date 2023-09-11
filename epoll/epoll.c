@@ -46,7 +46,7 @@ typedef struct {
   struct epoll_event ev;                 /* ctl mod event */
   int epoll_fd;
   unsigned char sbuf[BUF_SIZE];                      /* hot buffer */
-  unsigned char conn_bufs[MAX_EVENTS - 4][BUF_SIZE]; /* connection specific
+  unsigned char conn_bufs[MAX_EVENTS][BUF_SIZE]; /* connection specific
                                                         buffers (slow path) */
 } server_t;
 
